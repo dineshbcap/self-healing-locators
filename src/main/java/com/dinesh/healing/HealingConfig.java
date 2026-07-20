@@ -69,4 +69,22 @@ public final class HealingConfig {
     public double llmConfidenceThreshold() {
         return Double.parseDouble(get("healing.llm.confidence.threshold", "0.7"));
     }
+
+    public String llmModel() {
+        return get("healing.llm.model", "claude-sonnet-4-6");
+    }
+
+    /** Name of the environment variable holding the API key (never the key itself). */
+    public String llmApiKeyEnv() {
+        return get("healing.llm.apiKeyEnv", "ANTHROPIC_API_KEY");
+    }
+
+    public int llmTimeoutSeconds() {
+        return Integer.parseInt(get("healing.llm.timeoutSeconds", "30"));
+    }
+
+    /** Hard cap on pruned page source size sent per heal. */
+    public int llmMaxPageSourceChars() {
+        return Integer.parseInt(get("healing.llm.maxPageSourceChars", "60000"));
+    }
 }

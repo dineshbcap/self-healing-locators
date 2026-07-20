@@ -150,9 +150,9 @@ public final class SelfHealingElementLocator {
 
     private String pageSourceForEngine() {
         try {
-            return driver.getPageSource();
-            // Phase 2: PageSourcePruner.prune(...) + PiiRedactor.redact(...) go here,
-            // BEFORE anything leaves the machine.
+            // Order matters: prune first (smaller input for the regexes),
+            // then redact PII - all BEFORE anything leaves the machine.
+            return PiiRedactor.redact(PageSourcePruner.prune(driver.getPageSource()));
         } catch (RuntimeException e) {
             return "";
         }

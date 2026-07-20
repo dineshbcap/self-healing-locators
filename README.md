@@ -148,3 +148,48 @@ cached/reported, ambiguity is rejected, and `failOnHeal` escalates. No device ne
   leaves the machine), confidence gating.
 - **Phase 3:** richer Jenkins reporting, healing metrics per release, parallel-run hardening review.
 - **Phase 4:** auto-generated locators properties patch from the healing report (one-click PR to fix debt).
+
+---
+
+## Phase 2 — LLM healing (added)
+
+New classes:
+- `PageSourcePruner` — shrinks `getPageSource()` XML 5–10× (keeps only locator-relevant
+  attributes, drops invisible nodes, collapses empty layout wrappers). Degrades to
+  truncation on malformed XML — never breaks the healing path.
+- `PiiRedactor` — masks card/account numbers, SIN patterns, currency amounts, emails,
+  and phone numbers in the pruned XML **before it leaves the machine**. Resource-ids
+  survive untouched. Defence-in-depth on top of synthetic test data.
+- `LlmHealingEngine` — `HealingEngine` implementation calling the Anthropic Messages API
+  via `java.net.http` + Jackson only (no new dependencies). Temperature 0, JSON-only
+  response contract, rejects index-based xpaths, treats "element not present" as
+  no-heal (never guesses), and degrades to empty on any API failure so the run
+  falls through to the original NoSuchElementException.
+
+### Enabling LLM healing
+
+1. Export the key (never commit it):
+   ```bash
+   export ANTHROPIC_API_KEY=sk-ant-...
+   ```
+   On Jenkins: a Secret Text credential bound to the env var.
+2. Flip the flag: `healing.llm.enabled=true` (or `-Dhealing.llm.enabled=true`).
+3. Pass the engine in your driver factory:
+   ```java
+   HealingConfig config = new HealingConfig();
+   SelfHealingElementLocator healing = new SelfHealingElementLocator(
+           driver, repo, cache, new LlmHealingEngine(config), config);
+   ```
+
+Order of operations per heal attempt is unchanged:
+cache → deterministic → **LLM** → rethrow original. The LLM proposal must clear
+`healing.llm.confidence.threshold` AND resolve uniquely on screen before it is used.
+
+New config keys: `healing.llm.model`, `healing.llm.apiKeyEnv`,
+`healing.llm.timeoutSeconds`, `healing.llm.maxPageSourceChars`.
+
+### Phase 2 tests (CI-safe, no network)
+- `PageSourcePrunerAndRedactorTest` — prune/redact pipeline incl. end-to-end
+- `LlmHealingEngineTest` — full prompt-build + response-parse path via fake Transport:
+  valid proposal, fenced JSON, "none", index-xpath rejection, HTTP failure, garbage
+  response, missing API key short-circuit
