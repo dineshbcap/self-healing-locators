@@ -56,6 +56,11 @@ public final class LocatorRepository {
         return new LocatorRepository(byPlatform, androidPath + ", " + iosPath);
     }
 
+    /** Alias for {@link #fromClasspath(String, String)}, named after the file format. */
+    public static LocatorRepository fromProperties(String androidClasspathFile, String iosClasspathFile) {
+        return fromClasspath(androidClasspathFile, iosClasspathFile);
+    }
+
     private static Properties loadClasspathProperties(String resourcePath) {
         Properties props = new Properties();
         try (InputStream in = LocatorRepository.class.getClassLoader()
