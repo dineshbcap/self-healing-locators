@@ -56,6 +56,20 @@ public class LlmHealingEngineTest {
     }
 
     @Test
+    public void proseBeforeJsonIsStillParsed() {
+        var engine = engine((url, key, body) -> apiResponse(
+                "The description asks for a Placeholder Text field. I'll use an iOS Class Chain. "
+                        + "{\"strategy\": \"xpath\", \"value\": \"//XCUIElementTypeTextField[@value='Placeholder text']\", \"confidence\": 0.72}"));
+
+        Optional<HealingEngine.Proposal> proposal =
+                engine.propose("k", "d", "<hierarchy/>");
+
+        assertTrue(proposal.isPresent(), "JSON preceded by model commentary must still parse");
+        assertEquals(proposal.get().strategy(), LocatorStrategy.XPATH);
+        assertEquals(proposal.get().value(), "//XCUIElementTypeTextField[@value='Placeholder text']");
+    }
+
+    @Test
     public void noneStrategyMeansNoProposal() {
         var engine = engine((url, key, body) -> apiResponse("{\"strategy\":\"none\"}"));
         assertTrue(engine.propose("k", "d", "<hierarchy/>").isEmpty(),

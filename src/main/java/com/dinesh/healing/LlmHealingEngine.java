@@ -164,7 +164,12 @@ public final class LlmHealingEngine implements HealingEngine {
             if (cleaned.isEmpty()) {
                 return Optional.empty();
             }
-            JsonNode proposal = MAPPER.readTree(cleaned);
+            String jsonCandidate = extractJsonObject(cleaned);
+            if (jsonCandidate == null) {
+                LOG.warn("LLM response contained no JSON object: {}", truncate(cleaned, 200));
+                return Optional.empty();
+            }
+            JsonNode proposal = MAPPER.readTree(jsonCandidate);
             String strategyRaw = proposal.path("strategy").asText("none");
             if ("none".equalsIgnoreCase(strategyRaw)) {
                 LOG.info("LLM reports element not present on screen - no heal proposed");
@@ -185,6 +190,21 @@ public final class LlmHealingEngine implements HealingEngine {
             LOG.warn("Could not parse LLM healing response: {}", e.toString());
             return Optional.empty();
         }
+    }
+
+    /**
+     * Pulls the {@code {...}} JSON object out of a model response that may carry
+     * leading/trailing commentary despite the prompt asking for JSON only
+     * (e.g. "The description asks for... {"strategy": "id", ...}").
+     * Returns null if no brace pair is present.
+     */
+    private static String extractJsonObject(String text) {
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        if (start < 0 || end < start) {
+            return null;
+        }
+        return text.substring(start, end + 1);
     }
 
     /** Rejects xpaths like //X[3] whose only discriminator is a positional index. */
