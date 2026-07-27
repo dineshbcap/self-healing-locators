@@ -110,8 +110,19 @@ public final class OllamaHealingEngine implements HealingEngine {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", config.ollamaModel());
         root.put("stream", false);
+        // Reasoning models (e.g. qwen3) otherwise burn unbounded time on a chain-of-thought
+        // trace before the actual answer; ignored harmlessly by models that don't support it.
+        root.put("think", false);
         ObjectNode options = root.putObject("options");
         options.put("temperature", 0);
+        // Ollama defaults num_ctx to 4096 regardless of the model's real context length,
+        // silently truncating/context-shifting (slow, sometimes pathologically so) once the
+        // prompt - dominated by the pruned page source - exceeds it. Size this to comfortably
+        // fit healing.llm.maxPageSourceChars, capped at the model's own max context.
+        options.put("num_ctx", config.ollamaNumCtx());
+        // Matches the 300-token cap LlmHealingEngine/VastAiHealingEngine already use - the
+        // answer is always a short JSON object, never worth an unbounded generation.
+        options.put("num_predict", 300);
         ArrayNode messages = root.putArray("messages");
         ObjectNode message = messages.addObject();
         message.put("role", "user");

@@ -24,9 +24,9 @@ import java.util.Properties;
  *
  * Provider-specific keys - see {@link LlmHealingEngineFactory} for how
  * healing.llm.provider selects between them:
- *   healing.llm.model / healing.llm.apiKeyEnv              (anthropic)
- *   healing.llm.ollama.baseUrl / healing.llm.ollama.model  (ollama)
- *   healing.llm.vastai.baseUrl / healing.llm.vastai.model / healing.llm.vastai.apiKeyEnv (vastai)
+ *   healing.llm.model / healing.llm.apiKeyEnv                                (anthropic)
+ *   healing.llm.ollama.baseUrl / healing.llm.ollama.model / .numCtx          (ollama)
+ *   healing.llm.vastai.baseUrl / healing.llm.vastai.model / .apiKeyEnv       (vastai)
  */
 public final class HealingConfig {
 
@@ -112,6 +112,17 @@ public final class HealingConfig {
 
     public String ollamaModel() {
         return get("healing.llm.ollama.model", "llama3.1");
+    }
+
+    /**
+     * Context window (tokens) requested from Ollama for each heal call. Ollama defaults
+     * new sessions to 4096 regardless of the model's real capacity unless a request sets
+     * this explicitly, so size it to comfortably fit {@link #llmMaxPageSourceChars()} - a
+     * rough rule of thumb is (maxPageSourceChars / 3) + 1000 for prompt overhead - without
+     * exceeding the model's own max context (see {@code ollama show <model>}).
+     */
+    public int ollamaNumCtx() {
+        return Integer.parseInt(get("healing.llm.ollama.numCtx", "8192"));
     }
 
     // ---- vastai (self-hosted OpenAI-compatible cloud) ----

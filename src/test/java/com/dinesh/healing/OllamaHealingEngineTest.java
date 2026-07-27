@@ -93,6 +93,12 @@ public class OllamaHealingEngineTest {
         assertEquals(root.path("model").asText(), "llama3.1");
         assertEquals(root.path("options").path("temperature").asInt(), 0, "Determinism requires temperature 0");
         assertEquals(root.path("stream").asBoolean(), false);
+        assertEquals(root.path("think").asBoolean(), false,
+                "Reasoning-model chain-of-thought must be disabled - unbounded latency for no benefit here");
+        assertEquals(root.path("options").path("num_ctx").asInt(), 8192,
+                "num_ctx must be set explicitly - Ollama silently defaults to 4096 otherwise");
+        assertEquals(root.path("options").path("num_predict").asInt(), 300,
+                "Generation must be capped like the other two providers");
         String prompt = root.path("messages").get(0).path("content").asText();
         assertTrue(prompt.contains("login.submitButton"));
         assertTrue(prompt.contains("Primary Sign In button"));
