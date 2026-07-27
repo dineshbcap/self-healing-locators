@@ -16,58 +16,45 @@ import java.time.Duration;
 import java.util.Optional;
 
 /**
- * LLM-backed healing via the Anthropic Messages API, using only java.net.http +
- * Jackson (no new dependencies - bank-friendly). One of three {@link HealingEngine}
- * providers - see also {@link OllamaHealingEngine} (local) and
+ * HealingEngine backed by a local Ollama server (https://ollama.com), talking to
+ * its native {@code /api/chat} endpoint. One of three {@link HealingEngine}
+ * providers - see also {@link LlmHealingEngine} (Anthropic) and
  * {@link VastAiHealingEngine} (self-hosted OpenAI-compatible cloud). Prefer
- * {@link LlmHealingEngineFactory} to select the provider from config rather than
- * constructing a specific engine directly.
+ * {@link LlmHealingEngineFactory} to select the provider from config.
  *
- * The API key is read from the ANTHROPIC_API_KEY environment variable (name
- * configurable via healing.llm.apiKeyEnv). It is NEVER logged and never
- * written to any report or cache artifact.
+ * No API key: Ollama is expected to run unauthenticated on localhost or a
+ * trusted host you control, which is why this is the option for teams that
+ * cannot let a page source (even pruned/redacted) leave their network at all.
  *
- * Payload sent per heal: locator key, description, original locator, and the
- * PRUNED + PII-REDACTED page source only. Callers (SelfHealingElementLocator)
- * are responsible for running PageSourcePruner + PiiRedactor first.
+ * Configure with:
+ *   healing.llm.provider=ollama
+ *   healing.llm.ollama.baseUrl   default http://localhost:11434
+ *   healing.llm.ollama.model     default llama3.1 (must already be `ollama pull`ed)
  *
  * The HTTP layer is injectable ({@link Transport}) so unit tests exercise the
  * full prompt/parse path without network access.
  */
-public final class LlmHealingEngine implements HealingEngine {
+public final class OllamaHealingEngine implements HealingEngine {
 
-    private static final Logger LOG = LoggerFactory.getLogger(LlmHealingEngine.class);
+    private static final Logger LOG = LoggerFactory.getLogger(OllamaHealingEngine.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final String API_URL = "https://api.anthropic.com/v1/messages";
-    private static final String ANTHROPIC_VERSION = "2023-06-01";
 
     /** Injectable HTTP seam for tests. */
     @FunctionalInterface
     public interface Transport {
-        String post(String url, String apiKey, String jsonBody) throws IOException, InterruptedException;
+        String post(String url, String jsonBody) throws IOException, InterruptedException;
     }
 
     private final HealingConfig config;
     private final Transport transport;
-    private final String apiKey;
 
-    public LlmHealingEngine(HealingConfig config) {
-        this(config, defaultTransport(config), resolveApiKey(config));
+    public OllamaHealingEngine(HealingConfig config) {
+        this(config, defaultTransport(config));
     }
 
-    LlmHealingEngine(HealingConfig config, Transport transport, String apiKey) {
+    OllamaHealingEngine(HealingConfig config, Transport transport) {
         this.config = config;
         this.transport = transport;
-        this.apiKey = apiKey;
-    }
-
-    private static String resolveApiKey(HealingConfig config) {
-        String env = config.llmApiKeyEnv();
-        String key = System.getenv(env);
-        if (key == null || key.isBlank()) {
-            LOG.warn("LLM healing enabled but env var {} is not set - LLM heals will be skipped", env);
-        }
-        return key;
     }
 
     private static Transport defaultTransport(HealingConfig config) {
@@ -75,20 +62,18 @@ public final class LlmHealingEngine implements HealingEngine {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         Duration timeout = Duration.ofSeconds(config.llmTimeoutSeconds());
-        return (url, apiKey, body) -> {
+        return (url, body) -> {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(timeout)
                     .header("Content-Type", "application/json")
-                    .header("x-api-key", apiKey)
-                    .header("anthropic-version", ANTHROPIC_VERSION)
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
             HttpResponse<String> response =
                     client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
-                throw new IOException("Anthropic API returned HTTP " + response.statusCode()
-                        + ": " + truncate(response.body(), 500));
+                throw new IOException("Ollama returned HTTP " + response.statusCode()
+                        + ": " + LlmResponseParser.truncate(response.body(), 500));
             }
             return response.body();
         };
@@ -96,34 +81,37 @@ public final class LlmHealingEngine implements HealingEngine {
 
     @Override
     public Optional<Proposal> propose(String locatorKey, String description, String prunedPageSource) {
-        if (apiKey == null || apiKey.isBlank()) {
-            return Optional.empty();
-        }
         if (prunedPageSource == null || prunedPageSource.isBlank()) {
             return Optional.empty();
         }
         String pageSource = truncate(prunedPageSource, config.llmMaxPageSourceChars());
+        String url = chatUrl();
         try {
             String requestBody = buildRequestBody(locatorKey, description, pageSource);
-            String responseBody = transport.post(API_URL, apiKey, requestBody);
+            String responseBody = transport.post(url, requestBody);
             return parseProposal(responseBody);
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            LOG.warn("LLM healing call failed for '{}': {}", locatorKey, e.toString());
+            LOG.warn("Ollama healing call failed for '{}': {}", locatorKey, e.toString());
             return Optional.empty();
         }
     }
 
-    String buildRequestBody(String locatorKey, String description, String pageSource)
-            throws IOException {
+    private String chatUrl() {
+        String base = config.ollamaBaseUrl();
+        return (base.endsWith("/") ? base.substring(0, base.length() - 1) : base) + "/api/chat";
+    }
+
+    String buildRequestBody(String locatorKey, String description, String pageSource) throws IOException {
         String prompt = LlmResponseParser.buildPrompt(locatorKey, description, pageSource);
 
         ObjectNode root = MAPPER.createObjectNode();
-        root.put("model", config.llmModel());
-        root.put("max_tokens", 300);
-        root.put("temperature", 0);
+        root.put("model", config.ollamaModel());
+        root.put("stream", false);
+        ObjectNode options = root.putObject("options");
+        options.put("temperature", 0);
         ArrayNode messages = root.putArray("messages");
         ObjectNode message = messages.addObject();
         message.put("role", "user");
@@ -134,22 +122,12 @@ public final class LlmHealingEngine implements HealingEngine {
     Optional<Proposal> parseProposal(String responseBody) {
         try {
             JsonNode root = MAPPER.readTree(responseBody);
-            StringBuilder text = new StringBuilder();
-            for (JsonNode block : root.path("content")) {
-                if ("text".equals(block.path("type").asText())) {
-                    text.append(block.path("text").asText());
-                }
-            }
-            return LlmResponseParser.parseProposal(text.toString());
+            String text = root.path("message").path("content").asText("");
+            return LlmResponseParser.parseProposal(text);
         } catch (IOException e) {
-            LOG.warn("Could not parse LLM healing response: {}", e.toString());
+            LOG.warn("Could not parse Ollama healing response: {}", e.toString());
             return Optional.empty();
         }
-    }
-
-    /** Rejects xpaths like //X[3] whose only discriminator is a positional index. */
-    static boolean looksIndexBased(String xpath) {
-        return LlmResponseParser.looksIndexBased(xpath);
     }
 
     private static String truncate(String s, int max) {

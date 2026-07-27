@@ -159,37 +159,118 @@ New classes:
   truncation on malformed XML — never breaks the healing path.
 - `PiiRedactor` — masks card/account numbers, SIN patterns, currency amounts, emails,
   and phone numbers in the pruned XML **before it leaves the machine**. Resource-ids
-  survive untouched. Defence-in-depth on top of synthetic test data.
-- `LlmHealingEngine` — `HealingEngine` implementation calling the Anthropic Messages API
-  via `java.net.http` + Jackson only (no new dependencies). Temperature 0, JSON-only
-  response contract, rejects index-based xpaths, treats "element not present" as
-  no-heal (never guesses), and degrades to empty on any API failure so the run
-  falls through to the original NoSuchElementException.
+  survive untouched. Defence-in-depth on top of synthetic test data. Runs regardless
+  of which LLM provider is selected below.
+- `LlmResponseParser` — the provider-agnostic prompt template and response parser
+  shared by every engine below: temperature-0 JSON-only contract, tolerates
+  commentary the model adds around the JSON, rejects index-based xpaths, treats
+  "element not present" as no-heal (never guesses).
+- `LlmHealingEngine` — Anthropic Messages API (cloud).
+- `OllamaHealingEngine` — local Ollama server, no API key.
+- `VastAiHealingEngine` — self-hosted OpenAI-compatible chat-completions endpoint
+  (the reference case is a vast.ai GPU rental, but any vLLM / text-generation-webui /
+  LM Studio server speaking the OpenAI wire format works the same way).
+- `LlmHealingEngineFactory` — builds whichever of the three is configured via
+  `healing.llm.provider`, so switching providers is a config change, not a code change.
+
+All three degrade to empty on any failure (timeout, HTTP error, bad JSON) so the
+run always falls through to the original `NoSuchElementException` — an LLM outage
+never breaks the suite.
 
 ### Enabling LLM healing
 
-1. Export the key (never commit it):
-   ```bash
-   export ANTHROPIC_API_KEY=sk-ant-...
-   ```
-   On Jenkins: a Secret Text credential bound to the env var.
-2. Flip the flag: `healing.llm.enabled=true` (or `-Dhealing.llm.enabled=true`).
-3. Pass the engine in your driver factory:
+1. Flip the flag: `healing.llm.enabled=true` (or `-Dhealing.llm.enabled=true`).
+2. Pick a provider and configure it (see the three sections below).
+3. Wire the factory into your driver factory — this one line never needs to change
+   again when you switch providers, only the properties file does:
    ```java
    HealingConfig config = new HealingConfig();
    SelfHealingElementLocator healing = new SelfHealingElementLocator(
-           driver, repo, cache, new LlmHealingEngine(config), config);
+           driver, repo, cache, LlmHealingEngineFactory.create(config), config);
    ```
 
 Order of operations per heal attempt is unchanged:
 cache → deterministic → **LLM** → rethrow original. The LLM proposal must clear
 `healing.llm.confidence.threshold` AND resolve uniquely on screen before it is used.
 
-New config keys: `healing.llm.model`, `healing.llm.apiKeyEnv`,
+Common config keys (apply to all providers): `healing.llm.enabled`,
+`healing.llm.provider`, `healing.llm.confidence.threshold`,
 `healing.llm.timeoutSeconds`, `healing.llm.maxPageSourceChars`.
+
+#### Provider: `anthropic` (default) — Claude Messages API, cloud
+
+```properties
+healing.llm.provider=anthropic
+healing.llm.model=claude-sonnet-4-6
+healing.llm.apiKeyEnv=ANTHROPIC_API_KEY
+```
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # never commit it; on Jenkins, a Secret Text credential
+```
+
+#### Provider: `ollama` — local model, nothing leaves the machine/network
+
+Requires [Ollama](https://ollama.com) installed and a model pulled locally:
+```bash
+ollama pull llama3.1
+ollama serve            # usually already running as a background service
+```
+```properties
+healing.llm.provider=ollama
+healing.llm.ollama.baseUrl=http://localhost:11434
+healing.llm.ollama.model=llama3.1
+```
+No API key — Ollama is expected to run unauthenticated on localhost or a host you
+control. This is the option for teams where even the pruned/redacted page source
+must never leave the corporate network.
+
+#### Provider: `vastai` — self-hosted model on rented GPU capacity
+
+vast.ai itself only rents GPU instances; there's no fixed "vast.ai API". You deploy
+an OpenAI-compatible inference server on the rented box — e.g.
+[vLLM](https://github.com/vllm-project/vllm) (`vllm serve <model> --port 8000`),
+text-generation-webui in OpenAI mode, or Ollama's own OpenAI-compatible endpoint —
+and point this engine at that instance's public URL:
+```properties
+healing.llm.provider=vastai
+healing.llm.vastai.baseUrl=http://<instance-ip>:8000/v1
+healing.llm.vastai.model=meta-llama/Llama-3.1-70B-Instruct
+healing.llm.vastai.apiKeyEnv=VASTAI_API_KEY
+```
+```bash
+export VASTAI_API_KEY=...   # the bearer token your inference server was started with
+```
+Because that URL is reachable from the open internet (unlike local Ollama), always
+put an API key/token in front of the server (most inference servers accept
+`--api-key` on startup) — the engine sends it as `Authorization: Bearer <token>`.
+
+### Switching providers on a consumer project
+
+Nothing in `SelfHealingElementLocator` or your page objects changes. The only
+moving part is `healing.properties` (or a `-D` override), because the driver
+factory calls `LlmHealingEngineFactory.create(config)` instead of `new
+LlmHealingEngine(config)`:
+
+- **Default to Claude in `healing.properties`**, then let individual runs flip
+  provider without touching the file:
+  ```bash
+  mvn test -Dhealing.llm.provider=ollama
+  mvn test -Dhealing.llm.provider=vastai -Dhealing.llm.vastai.baseUrl=http://1.2.3.4:8000/v1
+  ```
+- **Per-environment properties files** (e.g. `healing-local.properties` for devs on
+  Ollama, `healing-ci.properties` for Jenkins on Anthropic) — point
+  `new HealingConfig("healing-local.properties")` at the one you want.
+- An unknown `healing.llm.provider` value, or `healing.llm.enabled=false`, makes
+  the factory return `HealingEngine.NO_OP` — the suite still runs, just without
+  LLM healing, and a WARN is logged so misconfiguration is visible in the console.
 
 ### Phase 2 tests (CI-safe, no network)
 - `PageSourcePrunerAndRedactorTest` — prune/redact pipeline incl. end-to-end
-- `LlmHealingEngineTest` — full prompt-build + response-parse path via fake Transport:
-  valid proposal, fenced JSON, "none", index-xpath rejection, HTTP failure, garbage
-  response, missing API key short-circuit
+- `LlmHealingEngineTest` — Anthropic engine: full prompt-build + response-parse
+  path via fake Transport (valid proposal, fenced JSON, prose before JSON, "none",
+  index-xpath rejection, HTTP failure, garbage response, missing API key short-circuit)
+- `OllamaHealingEngineTest` — same coverage against the Ollama `/api/chat` envelope
+- `VastAiHealingEngineTest` — same coverage against the OpenAI-compatible
+  chat-completions envelope, plus missing-`baseUrl` short-circuit
+- `LlmHealingEngineFactoryTest` — `healing.llm.provider` selects the right engine
+  (case-insensitive), unknown values and `healing.llm.enabled=false` both yield `NO_OP`

@@ -11,35 +11,39 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
+import java.net.http.HttpRequest.Builder;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Optional;
 
 /**
- * LLM-backed healing via the Anthropic Messages API, using only java.net.http +
- * Jackson (no new dependencies - bank-friendly). One of three {@link HealingEngine}
- * providers - see also {@link OllamaHealingEngine} (local) and
- * {@link VastAiHealingEngine} (self-hosted OpenAI-compatible cloud). Prefer
- * {@link LlmHealingEngineFactory} to select the provider from config rather than
- * constructing a specific engine directly.
+ * HealingEngine backed by an OpenAI-compatible chat-completions endpoint you
+ * run yourself on rented GPU capacity (vast.ai is the reference case, but any
+ * self-hosted vLLM / text-generation-webui / LM Studio server works the same
+ * way). One of three {@link HealingEngine} providers - see also
+ * {@link LlmHealingEngine} (Anthropic) and {@link OllamaHealingEngine} (local).
+ * Prefer {@link LlmHealingEngineFactory} to select the provider from config.
  *
- * The API key is read from the ANTHROPIC_API_KEY environment variable (name
- * configurable via healing.llm.apiKeyEnv). It is NEVER logged and never
- * written to any report or cache artifact.
+ * vast.ai itself only rents compute - there is no fixed "vast.ai API". You
+ * deploy an OpenAI-compatible inference server (vLLM, text-generation-webui,
+ * Ollama's OpenAI-compatible mode, etc.) on the rented instance and point this
+ * engine at that instance's public URL. Because that URL is reachable from the
+ * open internet (unlike local Ollama), treat the API key as required in
+ * practice even though the wire format allows going without one.
  *
- * Payload sent per heal: locator key, description, original locator, and the
- * PRUNED + PII-REDACTED page source only. Callers (SelfHealingElementLocator)
- * are responsible for running PageSourcePruner + PiiRedactor first.
+ * Configure with:
+ *   healing.llm.provider=vastai
+ *   healing.llm.vastai.baseUrl    e.g. http://&lt;instance-ip&gt;:8000/v1 (no default - required)
+ *   healing.llm.vastai.model      the model name your server was started with
+ *   healing.llm.vastai.apiKeyEnv  env var holding the bearer token (default VASTAI_API_KEY)
  *
  * The HTTP layer is injectable ({@link Transport}) so unit tests exercise the
  * full prompt/parse path without network access.
  */
-public final class LlmHealingEngine implements HealingEngine {
+public final class VastAiHealingEngine implements HealingEngine {
 
-    private static final Logger LOG = LoggerFactory.getLogger(LlmHealingEngine.class);
+    private static final Logger LOG = LoggerFactory.getLogger(VastAiHealingEngine.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final String API_URL = "https://api.anthropic.com/v1/messages";
-    private static final String ANTHROPIC_VERSION = "2023-06-01";
 
     /** Injectable HTTP seam for tests. */
     @FunctionalInterface
@@ -51,21 +55,23 @@ public final class LlmHealingEngine implements HealingEngine {
     private final Transport transport;
     private final String apiKey;
 
-    public LlmHealingEngine(HealingConfig config) {
+    public VastAiHealingEngine(HealingConfig config) {
         this(config, defaultTransport(config), resolveApiKey(config));
     }
 
-    LlmHealingEngine(HealingConfig config, Transport transport, String apiKey) {
+    VastAiHealingEngine(HealingConfig config, Transport transport, String apiKey) {
         this.config = config;
         this.transport = transport;
         this.apiKey = apiKey;
     }
 
     private static String resolveApiKey(HealingConfig config) {
-        String env = config.llmApiKeyEnv();
+        String env = config.vastAiApiKeyEnv();
         String key = System.getenv(env);
         if (key == null || key.isBlank()) {
-            LOG.warn("LLM healing enabled but env var {} is not set - LLM heals will be skipped", env);
+            LOG.warn("vast.ai healing enabled but env var {} is not set - calls will be sent "
+                    + "without an Authorization header (only safe if your server enforces its "
+                    + "own network-level access control)", env);
         }
         return key;
     }
@@ -76,19 +82,19 @@ public final class LlmHealingEngine implements HealingEngine {
                 .build();
         Duration timeout = Duration.ofSeconds(config.llmTimeoutSeconds());
         return (url, apiKey, body) -> {
-            HttpRequest request = HttpRequest.newBuilder()
+            Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(timeout)
-                    .header("Content-Type", "application/json")
-                    .header("x-api-key", apiKey)
-                    .header("anthropic-version", ANTHROPIC_VERSION)
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
+                    .header("Content-Type", "application/json");
+            if (apiKey != null && !apiKey.isBlank()) {
+                builder.header("Authorization", "Bearer " + apiKey);
+            }
+            HttpRequest request = builder.POST(HttpRequest.BodyPublishers.ofString(body)).build();
             HttpResponse<String> response =
                     client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
-                throw new IOException("Anthropic API returned HTTP " + response.statusCode()
-                        + ": " + truncate(response.body(), 500));
+                throw new IOException("vast.ai endpoint returned HTTP " + response.statusCode()
+                        + ": " + LlmResponseParser.truncate(response.body(), 500));
             }
             return response.body();
         };
@@ -96,7 +102,10 @@ public final class LlmHealingEngine implements HealingEngine {
 
     @Override
     public Optional<Proposal> propose(String locatorKey, String description, String prunedPageSource) {
-        if (apiKey == null || apiKey.isBlank()) {
+        String baseUrl = config.vastAiBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            LOG.warn("LLM healing provider is 'vastai' but healing.llm.vastai.baseUrl is not "
+                    + "set - LLM heals will be skipped");
             return Optional.empty();
         }
         if (prunedPageSource == null || prunedPageSource.isBlank()) {
@@ -105,23 +114,27 @@ public final class LlmHealingEngine implements HealingEngine {
         String pageSource = truncate(prunedPageSource, config.llmMaxPageSourceChars());
         try {
             String requestBody = buildRequestBody(locatorKey, description, pageSource);
-            String responseBody = transport.post(API_URL, apiKey, requestBody);
+            String responseBody = transport.post(chatUrl(baseUrl), apiKey, requestBody);
             return parseProposal(responseBody);
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            LOG.warn("LLM healing call failed for '{}': {}", locatorKey, e.toString());
+            LOG.warn("vast.ai healing call failed for '{}': {}", locatorKey, e.toString());
             return Optional.empty();
         }
     }
 
-    String buildRequestBody(String locatorKey, String description, String pageSource)
-            throws IOException {
+    private static String chatUrl(String baseUrl) {
+        String base = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        return base + "/chat/completions";
+    }
+
+    String buildRequestBody(String locatorKey, String description, String pageSource) throws IOException {
         String prompt = LlmResponseParser.buildPrompt(locatorKey, description, pageSource);
 
         ObjectNode root = MAPPER.createObjectNode();
-        root.put("model", config.llmModel());
+        root.put("model", config.vastAiModel());
         root.put("max_tokens", 300);
         root.put("temperature", 0);
         ArrayNode messages = root.putArray("messages");
@@ -134,22 +147,12 @@ public final class LlmHealingEngine implements HealingEngine {
     Optional<Proposal> parseProposal(String responseBody) {
         try {
             JsonNode root = MAPPER.readTree(responseBody);
-            StringBuilder text = new StringBuilder();
-            for (JsonNode block : root.path("content")) {
-                if ("text".equals(block.path("type").asText())) {
-                    text.append(block.path("text").asText());
-                }
-            }
-            return LlmResponseParser.parseProposal(text.toString());
+            String text = root.path("choices").path(0).path("message").path("content").asText("");
+            return LlmResponseParser.parseProposal(text);
         } catch (IOException e) {
-            LOG.warn("Could not parse LLM healing response: {}", e.toString());
+            LOG.warn("Could not parse vast.ai healing response: {}", e.toString());
             return Optional.empty();
         }
-    }
-
-    /** Rejects xpaths like //X[3] whose only discriminator is a positional index. */
-    static boolean looksIndexBased(String xpath) {
-        return LlmResponseParser.looksIndexBased(xpath);
     }
 
     private static String truncate(String s, int max) {

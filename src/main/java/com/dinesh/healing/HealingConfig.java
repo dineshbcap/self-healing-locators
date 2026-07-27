@@ -15,9 +15,18 @@ import java.util.Properties;
  *   healing.cache.file         path for the persisted healing cache (default target/healing-cache.json)
  *   healing.report.file        path for the healing report (default target/healing-report.json)
  *
- * Phase 2 keys (read but unused until the LLM engine lands):
+ * Phase 2 keys:
  *   healing.llm.enabled                default false
+ *   healing.llm.provider               anthropic (default) | ollama | vastai
  *   healing.llm.confidence.threshold   default 0.7
+ *   healing.llm.timeoutSeconds         default 30
+ *   healing.llm.maxPageSourceChars     default 60000
+ *
+ * Provider-specific keys - see {@link LlmHealingEngineFactory} for how
+ * healing.llm.provider selects between them:
+ *   healing.llm.model / healing.llm.apiKeyEnv              (anthropic)
+ *   healing.llm.ollama.baseUrl / healing.llm.ollama.model  (ollama)
+ *   healing.llm.vastai.baseUrl / healing.llm.vastai.model / healing.llm.vastai.apiKeyEnv (vastai)
  */
 public final class HealingConfig {
 
@@ -66,9 +75,25 @@ public final class HealingConfig {
         return Boolean.parseBoolean(get("healing.llm.enabled", "false"));
     }
 
+    /** Which HealingEngine implementation {@link LlmHealingEngineFactory} builds. */
+    public String llmProvider() {
+        return get("healing.llm.provider", "anthropic").trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
     public double llmConfidenceThreshold() {
         return Double.parseDouble(get("healing.llm.confidence.threshold", "0.7"));
     }
+
+    public int llmTimeoutSeconds() {
+        return Integer.parseInt(get("healing.llm.timeoutSeconds", "30"));
+    }
+
+    /** Hard cap on pruned page source size sent per heal. */
+    public int llmMaxPageSourceChars() {
+        return Integer.parseInt(get("healing.llm.maxPageSourceChars", "60000"));
+    }
+
+    // ---- anthropic ----
 
     public String llmModel() {
         return get("healing.llm.model", "claude-sonnet-4-6");
@@ -79,12 +104,29 @@ public final class HealingConfig {
         return get("healing.llm.apiKeyEnv", "ANTHROPIC_API_KEY");
     }
 
-    public int llmTimeoutSeconds() {
-        return Integer.parseInt(get("healing.llm.timeoutSeconds", "30"));
+    // ---- ollama (local) ----
+
+    public String ollamaBaseUrl() {
+        return get("healing.llm.ollama.baseUrl", "http://localhost:11434");
     }
 
-    /** Hard cap on pruned page source size sent per heal. */
-    public int llmMaxPageSourceChars() {
-        return Integer.parseInt(get("healing.llm.maxPageSourceChars", "60000"));
+    public String ollamaModel() {
+        return get("healing.llm.ollama.model", "llama3.1");
+    }
+
+    // ---- vastai (self-hosted OpenAI-compatible cloud) ----
+
+    /** No sane default - every rented instance has a different host/port. */
+    public String vastAiBaseUrl() {
+        return get("healing.llm.vastai.baseUrl", "");
+    }
+
+    public String vastAiModel() {
+        return get("healing.llm.vastai.model", "");
+    }
+
+    /** Name of the environment variable holding the bearer token (never the key itself). */
+    public String vastAiApiKeyEnv() {
+        return get("healing.llm.vastai.apiKeyEnv", "VASTAI_API_KEY");
     }
 }
