@@ -122,7 +122,10 @@ public final class LlmHealingEngine implements HealingEngine {
                 Element key: %s
                 Element description: %s
 
-                Locator preference order: accessibilityId > id > stable attribute-based xpath. \
+                Locator preference order for Android: accessibilityId > id > stable attribute-based xpath. \
+                NEVER return an index-based xpath such as //android.widget.Button[3].
+                
+                Locator preference order for IOS: accessibilityId > iOS Predicate > Class Chain > stable attribute-based xpath. \
                 NEVER return an index-based xpath such as //android.widget.Button[3].
 
                 Respond ONLY with JSON, no markdown fences, no commentary:
