@@ -99,6 +99,7 @@ public final class SelfHealingElementLocator {
             Optional<WebElement> el = DeterministicHealer.findUnique(driver, cached.get());
             if (el.isPresent()) {
                 LOG.info("Healing cache hit for '{}': {}", def.key(), cached.get());
+                HealingReporter.record(def, cached.get().toString(), "cache", "cache");
                 return afterHeal(def, el.get(), cached.get().toString(), "cache");
             }
             cache.evict(def.key());
