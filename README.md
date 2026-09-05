@@ -141,6 +141,21 @@ mvn test
 `button_login`: the primary lookup fails, the fragment strategy recovers it, the heal is
 cached/reported, ambiguity is rejected, and `failOnHeal` escalates. No device needed.
 
+## Development setup
+
+One-time, per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This activates `.githooks/prepare-commit-msg`, which drafts a commit message from
+your staged diff via the [Claude Code CLI](https://claude.com/claude-code) (`claude -p`)
+whenever you commit without `-m`. It's a no-op — leaves the message blank, never
+blocks the commit — if `claude` isn't installed/authenticated, the diff is empty, or
+you already supplied a message. Works from the terminal and from IDEs that run local
+git hooks (in IntelliJ, enable `Settings → Version Control → Git → Run git hooks`).
+
 ## Roadmap
 
 - **Phase 2:** `LlmHealingEngine` (Claude Messages API via `java.net.http`), `PageSourcePruner`
