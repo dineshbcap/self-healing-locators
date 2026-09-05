@@ -66,6 +66,8 @@ public final class DeterministicHealer {
         String idToken = lastIdToken(def);
         List<String> keywords = descriptionKeywords(def.description());
 
+        //Test the auto commit message
+
         // 1. Cross-strategy swap: id <-> accessibility id using the same value/token.
         if (def.strategy() == LocatorStrategy.ID && idToken != null) {
             candidates.add(new Candidate("a11yIdFromIdToken", AppiumBy.accessibilityId(idToken)));
