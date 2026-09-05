@@ -25,7 +25,7 @@ import java.util.Properties;
  * Provider-specific keys - see {@link LlmHealingEngineFactory} for how
  * healing.llm.provider selects between them:
  *   healing.llm.model / healing.llm.apiKeyEnv                                (anthropic)
- *   healing.llm.ollama.baseUrl / healing.llm.ollama.model / .numCtx          (ollama)
+ *   healing.llm.ollama.baseUrl / healing.llm.ollama.model / .numCtx / .apiKeyEnv (ollama)
  *   healing.llm.vastai.baseUrl / healing.llm.vastai.model / .apiKeyEnv       (vastai)
  */
 public final class HealingConfig {
@@ -123,6 +123,16 @@ public final class HealingConfig {
      */
     public int ollamaNumCtx() {
         return Integer.parseInt(get("healing.llm.ollama.numCtx", "8192"));
+    }
+
+    /**
+     * Name of the environment variable holding a bearer token, for Ollama instances that
+     * sit behind an authenticating reverse proxy/tunnel (e.g. a vast.ai Instance Portal
+     * quick tunnel) rather than running locally/unauthenticated. Blank by default - no
+     * Authorization header is sent unless this is set to a non-blank env var name.
+     */
+    public String ollamaApiKeyEnv() {
+        return get("healing.llm.ollama.apiKeyEnv", "");
     }
 
     // ---- vastai (self-hosted OpenAI-compatible cloud) ----

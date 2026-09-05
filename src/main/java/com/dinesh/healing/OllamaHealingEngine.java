@@ -22,14 +22,18 @@ import java.util.Optional;
  * {@link VastAiHealingEngine} (self-hosted OpenAI-compatible cloud). Prefer
  * {@link LlmHealingEngineFactory} to select the provider from config.
  *
- * No API key: Ollama is expected to run unauthenticated on localhost or a
- * trusted host you control, which is why this is the option for teams that
- * cannot let a page source (even pruned/redacted) leave their network at all.
+ * No API key by default: Ollama is expected to run unauthenticated on localhost or a
+ * trusted host you control, which is why this is the option for teams that cannot let
+ * a page source (even pruned/redacted) leave their network at all. If instead you're
+ * reaching a remote Ollama through an authenticating reverse proxy/tunnel (e.g. a
+ * vast.ai Instance Portal quick tunnel gating access with a bearer token), set
+ * healing.llm.ollama.apiKeyEnv to send it as an Authorization header.
  *
  * Configure with:
  *   healing.llm.provider=ollama
  *   healing.llm.ollama.baseUrl   default http://localhost:11434
  *   healing.llm.ollama.model     default llama3.1 (must already be `ollama pull`ed)
+ *   healing.llm.ollama.apiKeyEnv env var holding a bearer token - optional, unset by default
  *
  * The HTTP layer is injectable ({@link Transport}) so unit tests exercise the
  * full prompt/parse path without network access.
@@ -42,19 +46,39 @@ public final class OllamaHealingEngine implements HealingEngine {
     /** Injectable HTTP seam for tests. */
     @FunctionalInterface
     public interface Transport {
-        String post(String url, String jsonBody) throws IOException, InterruptedException;
+        String post(String url, String apiKey, String jsonBody) throws IOException, InterruptedException;
     }
 
     private final HealingConfig config;
     private final Transport transport;
+    private final String apiKey;
 
     public OllamaHealingEngine(HealingConfig config) {
-        this(config, defaultTransport(config));
+        this(config, defaultTransport(config), resolveApiKey(config));
     }
 
     OllamaHealingEngine(HealingConfig config, Transport transport) {
+        this(config, transport, resolveApiKey(config));
+    }
+
+    OllamaHealingEngine(HealingConfig config, Transport transport, String apiKey) {
         this.config = config;
         this.transport = transport;
+        this.apiKey = apiKey;
+    }
+
+    private static String resolveApiKey(HealingConfig config) {
+        String env = config.ollamaApiKeyEnv();
+        if (env == null || env.isBlank()) {
+            return null;
+        }
+        String key = System.getenv(env);
+        if (key == null || key.isBlank()) {
+            LOG.warn("healing.llm.ollama.apiKeyEnv is set to '{}' but that env var is empty - "
+                    + "calls will be sent without an Authorization header", env);
+            return null;
+        }
+        return key;
     }
 
     private static Transport defaultTransport(HealingConfig config) {
@@ -62,13 +86,15 @@ public final class OllamaHealingEngine implements HealingEngine {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         Duration timeout = Duration.ofSeconds(config.llmTimeoutSeconds());
-        return (url, body) -> {
-            HttpRequest request = HttpRequest.newBuilder()
+        return (url, apiKey, body) -> {
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(timeout)
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
+                    .header("Content-Type", "application/json");
+            if (apiKey != null && !apiKey.isBlank()) {
+                builder.header("Authorization", "Bearer " + apiKey);
+            }
+            HttpRequest request = builder.POST(HttpRequest.BodyPublishers.ofString(body)).build();
             HttpResponse<String> response =
                     client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() / 100 != 2) {
@@ -88,7 +114,7 @@ public final class OllamaHealingEngine implements HealingEngine {
         String url = chatUrl();
         try {
             String requestBody = buildRequestBody(locatorKey, description, pageSource);
-            String responseBody = transport.post(url, requestBody);
+            String responseBody = transport.post(url, apiKey, requestBody);
             return parseProposal(responseBody);
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {

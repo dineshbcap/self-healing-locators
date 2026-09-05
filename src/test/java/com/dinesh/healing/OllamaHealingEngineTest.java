@@ -29,7 +29,7 @@ public class OllamaHealingEngineTest {
 
     @Test
     public void validProposalIsParsed() {
-        var engine = engine((url, body) -> apiResponse(
+        var engine = engine((url, apiKey, body) -> apiResponse(
                 "{\"strategy\":\"id\",\"value\":\"com.td.app:id/button_login\",\"confidence\":0.94}"));
 
         Optional<HealingEngine.Proposal> proposal =
@@ -43,7 +43,7 @@ public class OllamaHealingEngineTest {
 
     @Test
     public void proseBeforeJsonIsStillParsed() {
-        var engine = engine((url, body) -> apiResponse(
+        var engine = engine((url, apiKey, body) -> apiResponse(
                 "I'll use the id attribute here. "
                         + "{\"strategy\": \"id\", \"value\": \"loginBtn\", \"confidence\": 0.8}"));
 
@@ -55,14 +55,14 @@ public class OllamaHealingEngineTest {
 
     @Test
     public void noneStrategyMeansNoProposal() {
-        var engine = engine((url, body) -> apiResponse("{\"strategy\":\"none\"}"));
+        var engine = engine((url, apiKey, body) -> apiResponse("{\"strategy\":\"none\"}"));
         assertTrue(engine.propose("k", "d", "<hierarchy/>").isEmpty(),
                 "Element-not-present must yield empty, never a guess");
     }
 
     @Test
     public void indexBasedXpathIsRejected() {
-        var engine = engine((url, body) -> apiResponse(
+        var engine = engine((url, apiKey, body) -> apiResponse(
                 "{\"strategy\":\"xpath\",\"value\":\"//android.widget.Button[3]\",\"confidence\":0.9}"));
         assertTrue(engine.propose("k", "d", "<hierarchy/>").isEmpty(),
                 "Index-only xpaths are brittle and must be rejected");
@@ -70,7 +70,7 @@ public class OllamaHealingEngineTest {
 
     @Test
     public void httpFailureDegradesToEmpty() {
-        var engine = engine((url, body) -> {
+        var engine = engine((url, apiKey, body) -> {
             throw new java.io.IOException("connection refused - is `ollama serve` running?");
         });
         assertTrue(engine.propose("k", "d", "<hierarchy/>").isEmpty(),
@@ -79,13 +79,13 @@ public class OllamaHealingEngineTest {
 
     @Test
     public void garbageResponseDegradesToEmpty() {
-        var engine = engine((url, body) -> apiResponse("here is your locator: btn_login"));
+        var engine = engine((url, apiKey, body) -> apiResponse("here is your locator: btn_login"));
         assertTrue(engine.propose("k", "d", "<hierarchy/>").isEmpty());
     }
 
     @Test
     public void requestBodyContainsPromptAndUsesNoAuth() throws Exception {
-        var engine = engine((url, body) -> apiResponse("{\"strategy\":\"none\"}"));
+        var engine = engine((url, apiKey, body) -> apiResponse("{\"strategy\":\"none\"}"));
         String body = engine.buildRequestBody(
                 "login.submitButton", "Primary Sign In button", "<hierarchy/>");
 
