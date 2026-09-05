@@ -1,0 +1,54 @@
+#!/bin/sh
+# Auto-suggest a commit message via the Claude Code CLI, based on the staged
+# diff. Skipped for merges/squashes, when a real message was already
+# supplied (-m/-F/-c or a filled-in template), or when `claude` isn't
+# available. Never blocks the commit — any failure just leaves the message
+# blank for you to fill in manually.
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+
+case "$COMMIT_SOURCE" in
+  merge|squash) exit 0 ;;
+esac
+
+command -v claude >/dev/null 2>&1 || exit 0
+
+# Skip if there's already real (non-comment, non-blank) content in the message file.
+if grep -vqE '^[[:space:]]*#|^[[:space:]]*$' "$COMMIT_MSG_FILE" 2>/dev/null; then
+  exit 0
+fi
+
+DIFF=$(git diff --cached --diff-filter=d | head -c 8000)
+[ -z "$DIFF" ] && exit 0
+
+INSTRUCTIONS="Below is a staged git diff from a Java Selenium self-healing-locators project. Write a git commit message in the style of this repo: a short imperative summary line (no period, no markdown, no conventional-commit prefix), optionally followed by a blank line and 1-3 short body lines only if the change genuinely needs more explanation. Output ONLY the commit message text, nothing else (no preamble, no quotes, no code fences)."
+
+TMP_OUT=$(mktemp)
+
+(
+  printf '%s' "$DIFF" | claude -p "$INSTRUCTIONS" --allowedTools "" > "$TMP_OUT" 2>/dev/null
+) &
+CMD_PID=$!
+
+(
+  sleep 25
+  kill "$CMD_PID" 2>/dev/null
+) >/dev/null 2>&1 &
+WATCHER_PID=$!
+
+wait "$CMD_PID" 2>/dev/null
+kill "$WATCHER_PID" 2>/dev/null
+wait "$WATCHER_PID" 2>/dev/null
+
+SUGGESTION=$(cat "$TMP_OUT" 2>/dev/null)
+rm -f "$TMP_OUT"
+
+[ -z "$SUGGESTION" ] && exit 0
+
+{
+  printf '%s\n\n' "$SUGGESTION"
+  cat "$COMMIT_MSG_FILE"
+} > "${COMMIT_MSG_FILE}.tmp" && mv "${COMMIT_MSG_FILE}.tmp" "$COMMIT_MSG_FILE"
+
+exit 0
