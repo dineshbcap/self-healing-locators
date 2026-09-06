@@ -66,8 +66,6 @@ public final class DeterministicHealer {
         String idToken = lastIdToken(def);
         List<String> keywords = descriptionKeywords(def.description());
 
-        //Test the auto commit message - again added
-
         // 1. Cross-strategy swap: id <-> accessibility id using the same value/token.
         if (def.strategy() == LocatorStrategy.ID && idToken != null) {
             candidates.add(new Candidate("a11yIdFromIdToken", AppiumBy.accessibilityId(idToken)));
@@ -76,6 +74,18 @@ public final class DeterministicHealer {
             if (platform == Platform.ANDROID) {
                 candidates.add(new Candidate("resourceIdContainsA11yValue",
                         AppiumBy.xpath("//*[contains(@resource-id,'" + xpathSafe(def.value()) + "')]")));
+            } else {
+                // XCUITest has no resource-id, but the same identifier sometimes
+                // moves from `name` (accessibility id) to `label` or `value`.
+                // Tried as two separate candidates, label first: an OR'd single
+                // predicate would reject as ambiguous if label matches one
+                // element and value matches a different one.
+                candidates.add(new Candidate("iosLabelFromA11yId",
+                        AppiumBy.iOSNsPredicateString(
+                                "label == '" + predicateSafe(def.value()) + "'")));
+                candidates.add(new Candidate("iosValueFromA11yId",
+                        AppiumBy.iOSNsPredicateString(
+                                "value == '" + predicateSafe(def.value()) + "'")));
             }
         }
 
