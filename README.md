@@ -175,7 +175,9 @@ git hooks (in IntelliJ, enable `Settings → Version Control → Git → Run git
 - **Phase 3 (added):** `HealingReportPublisher` (Slack/Teams webhook summary), `HealingReporter.appendMetric`
   (healing-rate-per-release CSV), `HealingReportPublisherCli` + `jenkins/Jenkinsfile.healing-notify`
   (post-build wiring). Parallel-run hardening review still open.
-- **Phase 4:** auto-generated locators properties patch from the healing report (one-click PR to fix debt).
+- **Phase 4 (added):** `LocatorPatchGenerator` + `LocatorPatchCli` — a ready-to-review unified diff
+  (or direct `--apply`) against `locators_<platform>.properties` from the healing report, platform-aware
+  so an Android heal can never overwrite the iOS file's line for the same key.
 - **Phase 5 (stretch):** healing analytics — trend heal events per screen over time as a UI-churn
   signal (which screens heal constantly vs. never) using the Phase 3 metrics CSV as raw input.
 
@@ -391,3 +393,61 @@ posting a pipeline concern via the CLI - not both, to avoid double-posting.
 - `HealingReporterTest` — `record()` notifies listeners and survives a throwing listener,
   `writeReport()` produces parseable JSON, `appendMetric()` writes the CSV header once
   then appends rows, and CSV-escapes a build id containing commas/newlines
+
+---
+
+## Phase 4 — Auto-generated locator patch (added)
+
+New classes:
+- `LocatorPatchGenerator` — turns a healing report into a patch against a
+  `locators_<platform>.properties` file. Operates on the file as plain text (never via
+  `java.util.Properties` load/store), so comments, ordering, and blank lines survive -
+  only the value side of a matched `key=strategy=value` line is rewritten. Also renders
+  a `git apply` / `patch -p1` compatible unified diff.
+- `LocatorPatchCli` — the Jenkins-callable `main()`: prints the diff (review-only,
+  default) or applies it in place with `--apply`.
+
+`HealingReporter.HealingRecord` gained two fields to make this possible:
+`healedStrategy`/`healedValue` — the machine-usable `(LocatorStrategy, value)` pair
+behind a heal, recovered from the raw Selenium `By` via `HealingCache.recover` (the
+same reverse-mapping the cache already used internally) wherever the LLM's own
+`Proposal.strategy()/value()` wasn't already available directly. A record missing
+either (e.g. a report written before this field existed) is reported as **skipped**,
+never guessed at from the human-readable `healedLocator` string.
+
+**Platform-aware by construction:** locator keys are shared across both platform
+properties files by convention (same key, different strategy/value per platform) - so
+`HealingRecord` also gained a `platform` field, and `LocatorPatchGenerator.apply` takes
+the target `Platform` explicitly. A record for the other platform is reported as
+**wrongPlatformKeys** and never applied, which is what stops an Android heal from
+silently overwriting the iOS file's line for the same key (this was caught by testing
+the CLI against both files with the same report - worth being deliberate about when
+wiring your own tooling on top of the report, not just this CLI).
+
+### Usage
+
+```bash
+# Review only - prints a unified diff, touches nothing:
+java -cp self-healing-locators.jar com.dinesh.healing.LocatorPatchCli \
+    target/healing-report.json src/main/resources/locators/locators_android.properties android
+
+# Apply directly (e.g. a Jenkins job that commits the result as a PR):
+java -cp self-healing-locators.jar com.dinesh.healing.LocatorPatchCli \
+    target/healing-report.json src/main/resources/locators/locators_ios.properties ios --apply
+```
+
+Run once per platform file. A mixed Android+iOS report naturally produces
+`wrongPlatformKeys` warnings for the other platform's keys when you run it against
+this one - expected, not an error.
+
+### Phase 4 tests (CI-safe, no network)
+- `HealingCacheTest` — `HealingCache.recover` round-trips every `LocatorStrategy`
+  through its real `AppiumBy`/`By` `toString()` shape (this closes a latent gap where
+  `iOSClassChain` silently fell back to being recovered as `xpath`), plus basic
+  put/get/persist/load and cross-build cache discarding
+- `LocatorPatchGeneratorTest` — single/multiple key patches, the `.description` line
+  never touched, byte-for-byte survival of untouched lines, missing-key →
+  `unmatchedKeys`, blank strategy/value → `skippedKeys`, other-platform record →
+  `wrongPlatformKeys` (and the file staying untouched), last-record-wins on a repeated
+  key, and the unified-diff hunk grouping (adjacent changes merge, far-apart changes
+  split into separate hunks)

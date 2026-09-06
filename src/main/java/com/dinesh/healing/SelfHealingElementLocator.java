@@ -99,7 +99,9 @@ public final class SelfHealingElementLocator {
             Optional<WebElement> el = DeterministicHealer.findUnique(driver, cached.get());
             if (el.isPresent()) {
                 LOG.info("Healing cache hit for '{}': {}", def.key(), cached.get());
-                HealingReporter.record(def, cached.get().toString(), "cache", "cache");
+                HealingCache.Recovered recovered = HealingCache.recover(cached.get());
+                HealingReporter.record(def, platform, cached.get().toString(),
+                        recovered.strategy(), recovered.value(), "cache", "cache");
                 return afterHeal(def, el.get(), cached.get().toString(), "cache");
             }
             cache.evict(def.key());
@@ -111,7 +113,9 @@ public final class SelfHealingElementLocator {
         if (healed.isPresent()) {
             DeterministicHealer.Healed h = healed.get();
             cache.put(def.key(), h.healedBy());
-            HealingReporter.record(def, h.healedBy().toString(), h.strategyName(), "deterministic");
+            HealingCache.Recovered recovered = HealingCache.recover(h.healedBy());
+            HealingReporter.record(def, platform, h.healedBy().toString(),
+                    recovered.strategy(), recovered.value(), h.strategyName(), "deterministic");
             return afterHeal(def, h.element(), h.healedBy().toString(), h.strategyName());
         }
 
@@ -125,7 +129,8 @@ public final class SelfHealingElementLocator {
                 Optional<WebElement> el = DeterministicHealer.findUnique(driver, by);
                 if (el.isPresent()) {
                     cache.put(def.key(), proposal.get().strategy(), proposal.get().value());
-                    HealingReporter.record(def, by.toString(),
+                    HealingReporter.record(def, platform, by.toString(),
+                            proposal.get().strategy(), proposal.get().value(),
                             "llm(confidence=" + proposal.get().confidence() + ")", "llm");
                     return afterHeal(def, el.get(), by.toString(), "llm");
                 }

@@ -28,7 +28,8 @@ public class HealingReportPublisherTest {
 
     private static HealingReporter.HealingRecord record(String key) {
         return new HealingReporter.HealingRecord(
-                "2026-01-01T00:00:00Z", key, "desc", "id=old_" + key, "xpath=//new_" + key,
+                "2026-01-01T00:00:00Z", key, "android", "desc", "id=old_" + key, "xpath=//new_" + key,
+                "xpath", "//new_" + key,
                 "resourceIdContainsFragment", "deterministic");
     }
 

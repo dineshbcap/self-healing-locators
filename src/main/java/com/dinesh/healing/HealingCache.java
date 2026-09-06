@@ -158,6 +158,9 @@ public final class HealingCache {
             if (head.contains("className")) {
                 return new Recovered(LocatorStrategy.CLASS_NAME, value);
             }
+            if (head.contains("iOSClassChain")) {
+                return new Recovered(LocatorStrategy.IOS_CLASS_CHAIN, value);
+            }
             return new Recovered(LocatorStrategy.XPATH, value);
         }
         return new Recovered(LocatorStrategy.XPATH, s);

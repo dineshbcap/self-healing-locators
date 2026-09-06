@@ -38,9 +38,19 @@ public final class HealingReporter {
     public record HealingRecord(
             String timestamp,
             String locatorKey,
+            /** "android" or "ios" - locator keys are shared across both platform properties files by
+             * convention, so Phase 4 needs this to avoid patching the wrong platform's file with a
+             * strategy/value that belongs to the other one. */
+            String platform,
             String description,
             String originalLocator,
             String healedLocator,
+            /** {@link LocatorStrategy#json()} of the healed locator (e.g. "xpath") - Phase 4 writes
+             * this straight back into a locators_&lt;platform&gt;.properties line. Blank if the
+             * strategy could not be recovered from a raw {@link org.openqa.selenium.By}. */
+            String healedStrategy,
+            /** Raw locator value paired with {@link #healedStrategy}, e.g. the xpath expression itself. */
+            String healedValue,
             String healingStrategy,
             String source) {
     }
@@ -60,18 +70,23 @@ public final class HealingReporter {
         LISTENERS.add(listener);
     }
 
-    public static void record(LocatorDef def, String healedLocator, String strategy, String source) {
+    public static void record(LocatorDef def, Platform platform, String healedLocator,
+                              LocatorStrategy healedStrategy, String healedValue,
+                              String healingStrategy, String source) {
         HealingRecord record = new HealingRecord(
                 Instant.now().toString(),
                 def.key(),
+                platform.name().toLowerCase(java.util.Locale.ROOT),
                 def.description(),
                 def.toString(),
                 healedLocator,
-                strategy,
+                healedStrategy == null ? "" : healedStrategy.json(),
+                healedValue == null ? "" : healedValue,
+                healingStrategy,
                 source);
         RECORDS.add(record);
         LOG.warn("LOCATOR HEALED [{}] {} -> {} (via {})",
-                def.key(), def.strategy().json() + "=" + def.value(), healedLocator, strategy);
+                def.key(), def.strategy().json() + "=" + def.value(), healedLocator, healingStrategy);
         for (Listener listener : LISTENERS) {
             try {
                 listener.onHeal(record);

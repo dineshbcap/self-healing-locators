@@ -29,12 +29,16 @@ public class HealingReporterTest {
         List<HealingReporter.HealingRecord> seen = new java.util.ArrayList<>();
         HealingReporter.addListener(seen::add);
 
-        HealingReporter.record(def("login.submitButton"), "xpath=//new", "resourceIdContainsFragment", "deterministic");
+        HealingReporter.record(def("login.submitButton"), Platform.ANDROID, "xpath=//new",
+                LocatorStrategy.XPATH, "//new", "resourceIdContainsFragment", "deterministic");
 
         assertEquals(HealingReporter.healCount(), 1);
         assertEquals(seen.size(), 1);
         assertEquals(seen.get(0).locatorKey(), "login.submitButton");
+        assertEquals(seen.get(0).platform(), "android");
         assertEquals(seen.get(0).healedLocator(), "xpath=//new");
+        assertEquals(seen.get(0).healedStrategy(), "xpath");
+        assertEquals(seen.get(0).healedValue(), "//new");
     }
 
     @Test
@@ -43,14 +47,24 @@ public class HealingReporterTest {
             throw new RuntimeException("listener boom");
         });
 
-        HealingReporter.record(def("k"), "healed", "strategy", "source");
+        HealingReporter.record(def("k"), Platform.ANDROID, "healed",
+                LocatorStrategy.XPATH, "//new", "strategy", "source");
 
         assertEquals(HealingReporter.healCount(), 1, "Recording must succeed despite a broken listener");
     }
 
     @Test
+    public void recordToleratesNullHealedStrategyAndValue() {
+        HealingReporter.record(def("k"), Platform.ANDROID, "healed", null, null, "strategy", "source");
+
+        assertEquals(HealingReporter.records().get(0).healedStrategy(), "");
+        assertEquals(HealingReporter.records().get(0).healedValue(), "");
+    }
+
+    @Test
     public void writeReportProducesReadableJson() throws IOException {
-        HealingReporter.record(def("k"), "healed", "strategy", "source");
+        HealingReporter.record(def("k"), Platform.ANDROID, "healed",
+                LocatorStrategy.XPATH, "//new", "strategy", "source");
         Path file = Files.createTempFile("healing-report", ".json");
         try {
             HealingReporter.writeReport(file);
@@ -67,7 +81,8 @@ public class HealingReporterTest {
         Path file = Files.createTempFile("healing-metrics", ".csv");
         Files.deleteIfExists(file); // exercise the "file doesn't exist yet" header path
         try {
-            HealingReporter.record(def("k"), "healed", "strategy", "source");
+            HealingReporter.record(def("k"), Platform.ANDROID, "healed",
+                    LocatorStrategy.XPATH, "//new", "strategy", "source");
             HealingReporter.appendMetric("build-1.0.0", file);
             HealingReporter.appendMetric("build-1.0.1", file);
 
