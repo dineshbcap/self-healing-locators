@@ -84,4 +84,38 @@ public class PageSourcePrunerAndRedactorTest {
         assertTrue(redacted.contains("button_login"),
                 "Locatable ids must survive the pipeline");
     }
+
+    @Test
+    public void numericResourceIdSurvivesRedactionEvenWithoutAWordBoundary() {
+        // A resource-id ending right in a 16-digit run, with no separating
+        // underscore/letter before the digits - the one shape that would slip
+        // past a plain \b-anchored digit-run regex and get misredacted as a
+        // card number if the redactor weren't attribute-aware.
+        String xml = "<node resource-id=\"com.td.app:id/1234567890123456\" text=\"ok\"/>";
+        String redacted = PiiRedactor.redact(xml);
+        assertTrue(redacted.contains("com.td.app:id/1234567890123456"),
+                "Numeric resource-id must survive redaction untouched");
+    }
+
+    @Test
+    public void iosNameAttributeIsProtectedLikeResourceId() {
+        String xml = "<node name=\"9876543210987654\" label=\"call me\"/>";
+        String redacted = PiiRedactor.redact(xml);
+        assertTrue(redacted.contains("name=\"9876543210987654\""),
+                "iOS accessibility id (name attribute) must survive redaction untouched");
+    }
+
+    @Test
+    public void redactionStillAppliesWhenPrunerFallsBackToTruncation() {
+        // Malformed XML forces PageSourcePruner.prune() to degrade to raw
+        // (truncated) text rather than a parsed/serialized document. PII must
+        // still be masked on that fallback path before it reaches the LLM.
+        String broken = "<hierarchy><node text=\"Card 4520 1234 5678 9012\" resource-id=\"btn_1\"";
+        String pruned = PageSourcePruner.prune(broken);
+        assertEquals(pruned, broken, "Precondition: malformed XML degrades to raw text");
+
+        String redacted = PiiRedactor.redact(pruned);
+        assertFalse(redacted.contains("4520"), "Card number must still be masked on the fallback path");
+        assertTrue(redacted.contains("btn_1"), "resource-id must still survive on the fallback path");
+    }
 }

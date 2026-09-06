@@ -100,18 +100,48 @@ final class LlmResponseParser {
     }
 
     /**
-     * Pulls the {@code {...}} JSON object out of a model response that may carry
-     * leading/trailing commentary despite the prompt asking for JSON only
-     * (e.g. "The description asks for... {"strategy": "id", ...}").
-     * Returns null if no brace pair is present.
+     * Pulls the first balanced {@code {...}} JSON object out of a model response
+     * that may carry leading/trailing commentary despite the prompt asking for
+     * JSON only (e.g. "The description asks for... {"strategy": "id", ...}" or
+     * a valid JSON object followed by prose that itself contains braces).
+     * Tracks brace depth and string state (so a brace inside a quoted value,
+     * e.g. an xpath predicate, doesn't throw off the count) and stops as soon
+     * as the first object closes - a naive first-'{'-to-last-'}' scan would
+     * instead swallow any trailing commentary braces too. Returns null if no
+     * balanced brace pair is present.
      */
     private static String extractJsonObject(String text) {
         int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start < 0 || end < start) {
+        if (start < 0) {
             return null;
         }
-        return text.substring(start, end + 1);
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
     }
 
     static String truncate(String s, int max) {

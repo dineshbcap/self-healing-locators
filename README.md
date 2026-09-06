@@ -173,13 +173,19 @@ New classes:
   attributes, drops invisible nodes, collapses empty layout wrappers). Degrades to
   truncation on malformed XML — never breaks the healing path.
 - `PiiRedactor` — masks card/account numbers, SIN patterns, currency amounts, emails,
-  and phone numbers in the pruned XML **before it leaves the machine**. Resource-ids
-  survive untouched. Defence-in-depth on top of synthetic test data. Runs regardless
-  of which LLM provider is selected below.
+  and phone numbers **before anything leaves the machine**. Attribute-aware: it walks
+  `attr="value"` pairs and only redacts inside customer-facing attributes (text,
+  content-desc, label, value); identifier attributes (resource-id, name, class,
+  package, type) are never touched, even when their value happens to look like a
+  PII pattern (e.g. a purely numeric resource-id). Runs on whatever `PageSourcePruner`
+  returns, including its malformed-XML truncation fallback, so a pruning failure
+  never lets unredacted page source through. Defence-in-depth on top of synthetic
+  test data. Runs regardless of which LLM provider is selected below.
 - `LlmResponseParser` — the provider-agnostic prompt template and response parser
   shared by every engine below: temperature-0 JSON-only contract, tolerates
-  commentary the model adds around the JSON, rejects index-based xpaths, treats
-  "element not present" as no-heal (never guesses).
+  commentary the model adds around the JSON via a brace-depth scan (so trailing
+  prose that itself contains braces can't corrupt the extracted object), rejects
+  index-based xpaths, treats "element not present" as no-heal (never guesses).
 - `LlmHealingEngine` — Anthropic Messages API (cloud).
 - `OllamaHealingEngine` — local Ollama server, no API key.
 - `VastAiHealingEngine` — self-hosted OpenAI-compatible chat-completions endpoint
@@ -280,12 +286,21 @@ LlmHealingEngine(config)`:
   LLM healing, and a WARN is logged so misconfiguration is visible in the console.
 
 ### Phase 2 tests (CI-safe, no network)
-- `PageSourcePrunerAndRedactorTest` — prune/redact pipeline incl. end-to-end
+- `PageSourcePrunerAndRedactorTest` — prune/redact pipeline incl. end-to-end, the
+  numeric-resource-id/name boundary case, and redaction still applying on the
+  malformed-XML truncation fallback path
+- `LlmResponseParserTest` — the shared brace-depth JSON extraction directly:
+  trailing commentary that itself contains braces, braces inside a string value
+  (e.g. an xpath predicate), leading prose, no-JSON-at-all
 - `LlmHealingEngineTest` — Anthropic engine: full prompt-build + response-parse
   path via fake Transport (valid proposal, fenced JSON, prose before JSON, "none",
   index-xpath rejection, HTTP failure, garbage response, missing API key short-circuit)
 - `OllamaHealingEngineTest` — same coverage against the Ollama `/api/chat` envelope
 - `VastAiHealingEngineTest` — same coverage against the OpenAI-compatible
   chat-completions envelope, plus missing-`baseUrl` short-circuit
+- `LlmProviderParityTest` — feeds identical assistant text (valid proposal, fenced
+  JSON, prose before JSON, "none", no JSON) through all three providers' real
+  envelope shapes and asserts they parse to the same `Proposal`, guarding against
+  one provider silently drifting from the others
 - `LlmHealingEngineFactoryTest` — `healing.llm.provider` selects the right engine
   (case-insensitive), unknown values and `healing.llm.enabled=false` both yield `NO_OP`
