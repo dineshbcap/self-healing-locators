@@ -109,8 +109,10 @@ HealingReporter.addListener(record ->
 @AfterSuite(alwaysRun = true)
 public void writeHealingArtifacts() {
     HealingConfig config = new HealingConfig();
+    String buildId = System.getProperty("app.build.id", "unknown");
     HealingReporter.writeReport(Path.of(config.reportFile()));
-    HealingReporter.appendMetric(System.getProperty("app.build.id", "unknown"), Path.of(config.metricsFile()));
+    HealingReporter.appendMetric(buildId, Path.of(config.metricsFile()));
+    HealingReporter.appendEvents(buildId, Path.of(config.eventsFile())); // Phase 5 input
     HealingReportPublisher.publish(HealingReporter.records(), config); // no-op unless webhook.enabled=true
     // cache.persist() already covered by persistOnShutdown(), or call explicitly here.
 }
@@ -137,6 +139,7 @@ public void writeHealingArtifacts() {
 | `healing.llm.enabled` | `false` | Phase 2 switch |
 | `healing.llm.confidence.threshold` | `0.7` | Phase 2 minimum confidence |
 | `healing.metrics.file` | `target/healing-metrics.csv` | Phase 3: healing-rate-per-release CSV, one row per run |
+| `healing.events.file` | `target/healing-events.csv` | Phase 5: one row per heal event, input to `HealingChurnAnalyzer` |
 | `healing.report.webhook.enabled` | `false` | Phase 3: post a heal summary to Slack/Teams at suite end |
 | `healing.report.webhook.url` | *(blank)* | Slack incoming-webhook or Teams workflow-webhook URL |
 | `healing.report.webhook.format` | `slack` | `slack` \| `teams` \| `teams-messagecard` (legacy) |
@@ -178,8 +181,11 @@ git hooks (in IntelliJ, enable `Settings → Version Control → Git → Run git
 - **Phase 4 (added):** `LocatorPatchGenerator` + `LocatorPatchCli` — a ready-to-review unified diff
   (or direct `--apply`) against `locators_<platform>.properties` from the healing report, platform-aware
   so an Android heal can never overwrite the iOS file's line for the same key.
-- **Phase 5 (stretch):** healing analytics — trend heal events per screen over time as a UI-churn
-  signal (which screens heal constantly vs. never) using the Phase 3 metrics CSV as raw input.
+- **Phase 5 (added):** `HealingChurnAnalyzer` + `HealingChurnCli` — ranks screens by heal
+  frequency across builds from `healing.events.file` (a new, finer-grained per-event log;
+  Phase 3's `metricsFile` only has a per-run total, not enough to say which screen churned).
+  Distinct-build count outranks raw heal count, so one flaky run healing the same locator
+  5 times doesn't outrank a locator that genuinely recurs across 3 separate builds.
 
 ---
 
@@ -451,3 +457,55 @@ this one - expected, not an error.
   `wrongPlatformKeys` (and the file staying untouched), last-record-wins on a repeated
   key, and the unified-diff hunk grouping (adjacent changes merge, far-apart changes
   split into separate hunks)
+
+---
+
+## Phase 5 — Healing analytics (added)
+
+New classes:
+- `HealingChurnAnalyzer` — reads the accumulated `healing.events.file` CSV and ranks
+  "screens" (the part of a `screen.element` locator key before the first `.`) by heal
+  frequency. Ranks by **distinct build count first, then total heal count** - a single
+  flaky run healing the same locator 5 times looks very different from a locator that
+  genuinely recurs across 3 separate builds, and the latter is the real churn signal
+  worth investigating (unstable screen, or an under-owned one nobody's updating the
+  POM for).
+- `HealingChurnCli` — prints the ranked report from the command line / a Jenkins step.
+
+`HealingReporter.appendEvents(buildId, file)` is the new writer behind this: one CSV
+row per individual heal (`timestamp,buildId,platform,locatorKey,healingStrategy`).
+This is deliberately separate from Phase 3's `appendMetric` - that one only has a
+per-run *total*, which can't tell you WHICH screen is churning, only that something
+did. Call it alongside `appendMetric`/`writeReport` in the same `@AfterSuite` hook (see
+[Suite teardown](#5-suite-teardown-testng) above). Like `metricsFile`, this lives under
+`target/` by default, so it only accumulates within one build unless your Jenkins job
+restores the previous run's copy first - extend `jenkins/Jenkinsfile.healing-notify`'s
+`copyArtifacts` step to also grab `healing-events.csv`.
+
+**What it can't tell you:** the analyzer only ranks screens that healed at least once
+somewhere in the log - it has no way to enumerate "screens that never heal" without
+reading the full locator repository, which it deliberately never touches (keeps it a
+pure CSV-in, report-out utility, no classpath/properties-file coupling). Absence from
+the ranking means "no recorded heals", not "provably stable".
+
+### Usage
+
+```bash
+java -cp self-healing-locators.jar com.dinesh.healing.HealingChurnCli \
+    target/healing-events.csv --top 10
+```
+
+```
+Healing churn by screen (top 2 of 3):
+1. login                  3 heal(s) across 3 build(s) - keys: login.submitButton
+2. accounts               5 heal(s) across 1 build(s) - keys: accounts.transferButton
+...and 1 more screen(s)
+```
+
+### Phase 5 tests (CI-safe, no network)
+- `HealingChurnAnalyzerTest` — screen grouping from the locator key convention,
+  distinct-build vs. total-heal-count semantics (including the flaky-run-vs-chronic-issue
+  ranking case above), a key with no `.` being its own screen, malformed/blank CSV rows
+  skipped rather than crashing, and report truncation to `--top N`
+- `HealingReporterTest` — `appendEvents()` writes the CSV header once then one row per
+  heal, and writes nothing at all on a zero-heal run

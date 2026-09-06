@@ -17,6 +17,8 @@ import java.util.Properties;
  *
  * Phase 3 keys (reporting):
  *   healing.metrics.file               CSV, one row appended per run (default target/healing-metrics.csv)
+ *   healing.events.file                CSV, one row per heal event, for Phase 5 churn analysis
+ *                                       (default target/healing-events.csv)
  *   healing.report.webhook.enabled     default false
  *   healing.report.webhook.url         Slack incoming-webhook or Teams workflow-webhook URL (default blank)
  *   healing.report.webhook.format      slack (default) | teams | teams-messagecard (legacy Office 365 connector)
@@ -88,6 +90,18 @@ public final class HealingConfig {
      */
     public String metricsFile() {
         return get("healing.metrics.file", "target/healing-metrics.csv");
+    }
+
+    /**
+     * One CSV row per individual heal event (timestamp, build id, platform, locator key,
+     * healing strategy) - finer-grained than {@link #metricsFile()}'s per-run total, since
+     * {@link HealingChurnAnalyzer} (Phase 5) needs to know WHICH screen healed, not just
+     * how many times something healed. Same cross-build persistence caveat as
+     * {@link #metricsFile()} applies - living under target/ means it resets every
+     * `mvn clean`.
+     */
+    public String eventsFile() {
+        return get("healing.events.file", "target/healing-events.csv");
     }
 
     // ---- Phase 3: report webhook (Slack / Teams) ----

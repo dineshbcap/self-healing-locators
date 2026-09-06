@@ -2,15 +2,20 @@
 // by this repo's own CI. Copy into your pipeline and adjust paths/credentials.
 //
 // What it does:
-//   1. Archives target/healing-report.json and target/healing-metrics.csv so
-//      they survive the build and show up on the build page.
-//   2. Restores yesterday's healing-metrics.csv from the last successful build
-//      before the test stage runs, so healCount accumulates into a real
-//      per-release trend instead of resetting every build (target/ is wiped
-//      by `mvn clean` each run - see HealingConfig#metricsFile).
+//   1. Archives target/healing-report.json, target/healing-metrics.csv, and
+//      target/healing-events.csv so they survive the build and show up on the
+//      build page.
+//   2. Restores yesterday's healing-metrics.csv AND healing-events.csv from the
+//      last successful build before the test stage runs, so both the per-run
+//      total (Phase 3) and the per-screen event log (Phase 5) accumulate into
+//      real cross-build trends instead of resetting every build (target/ is
+//      wiped by `mvn clean` each run - see HealingConfig#metricsFile/#eventsFile).
 //   3. If the report has any heals, prints the Slack/Teams payload via
 //      HealingReportPublisherCli and posts it with curl using a Jenkins
 //      credential (never put the webhook URL in the Jenkinsfile itself).
+//   4. Prints the Phase 5 screen-churn ranking to the build console - a
+//      periodic/weekly job is a better fit than every build, since the
+//      ranking only gets meaningful once events span several builds.
 //
 // Requires: consumer framework's build already produced self-healing-locators
 // on the classpath (it's a dependency of the framework's own pom.xml), and a
@@ -20,11 +25,11 @@ pipeline {
     agent any
 
     stages {
-        stage('Restore healing metrics history') {
+        stage('Restore healing history') {
             steps {
                 copyArtifacts(projectName: env.JOB_NAME,
                         selector: lastSuccessful(),
-                        filter: 'target/healing-metrics.csv',
+                        filter: 'target/healing-metrics.csv,target/healing-events.csv',
                         optional: true)
             }
         }
@@ -37,7 +42,7 @@ pipeline {
 
         stage('Publish healing report') {
             steps {
-                archiveArtifacts artifacts: 'target/healing-report.json,target/healing-metrics.csv',
+                archiveArtifacts artifacts: 'target/healing-report.json,target/healing-metrics.csv,target/healing-events.csv',
                         allowEmptyArchive: true
 
                 withCredentials([string(credentialsId: 'healing-webhook-url', variable: 'WEBHOOK_URL')]) {
@@ -54,6 +59,15 @@ pipeline {
                         fi
                     '''
                 }
+            }
+        }
+
+        stage('Healing churn ranking (Phase 5)') {
+            steps {
+                sh '''
+                    java -cp target/classes:$(cat target/classpath.txt 2>/dev/null || echo "") \\
+                        com.dinesh.healing.HealingChurnCli target/healing-events.csv --top 10
+                '''
             }
         }
     }

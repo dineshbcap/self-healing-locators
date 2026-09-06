@@ -137,6 +137,38 @@ public final class HealingReporter {
         }
     }
 
+    /**
+     * Appends one CSV row per heal from this run (timestamp, build id, platform, locator
+     * key, healing strategy) - {@link #appendMetric} only gives a per-run total, which
+     * can't tell you WHICH screen is churning. {@link HealingChurnAnalyzer} (Phase 5)
+     * reads this file back to rank screens by heal frequency. Call alongside
+     * {@link #writeReport}/{@link #appendMetric} from the same {@code @AfterSuite} hook.
+     * A zero-heal run appends nothing - there's no event to log.
+     */
+    public static void appendEvents(String buildId, Path eventsFile) {
+        if (RECORDS.isEmpty()) {
+            return;
+        }
+        try {
+            Files.createDirectories(eventsFile.toAbsolutePath().getParent());
+            boolean writeHeader = Files.notExists(eventsFile);
+            StringBuilder lines = new StringBuilder();
+            if (writeHeader) {
+                lines.append("timestamp,buildId,platform,locatorKey,healingStrategy\n");
+            }
+            for (HealingRecord record : RECORDS) {
+                lines.append(record.timestamp()).append(',')
+                        .append(csvSafe(buildId)).append(',')
+                        .append(csvSafe(record.platform())).append(',')
+                        .append(csvSafe(record.locatorKey())).append(',')
+                        .append(csvSafe(record.healingStrategy())).append('\n');
+            }
+            Files.writeString(eventsFile, lines, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            LOG.warn("Could not append healing events: {}", e.toString());
+        }
+    }
+
     private static String csvSafe(String s) {
         return (s == null ? "unknown" : s).replace(",", "_").replace("\n", " ");
     }

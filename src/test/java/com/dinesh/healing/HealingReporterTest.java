@@ -108,4 +108,37 @@ public class HealingReporterTest {
             Files.deleteIfExists(file);
         }
     }
+
+    @Test
+    public void appendEventsWritesOneRowPerHealWithHeaderOnce() throws IOException {
+        Path file = Files.createTempFile("healing-events", ".csv");
+        Files.deleteIfExists(file);
+        try {
+            HealingReporter.record(def("login.submitButton"), Platform.ANDROID, "healed",
+                    LocatorStrategy.XPATH, "//new", "resourceIdContainsFragment", "deterministic");
+            HealingReporter.record(def("login.usernameField"), Platform.ANDROID, "healed",
+                    LocatorStrategy.XPATH, "//new2", "resourceIdContainsFragment", "deterministic");
+            HealingReporter.appendEvents("build-1.0.0", file);
+
+            List<String> lines = Files.readAllLines(file);
+            assertEquals(lines.get(0), "timestamp,buildId,platform,locatorKey,healingStrategy");
+            assertEquals(lines.size(), 3, "Header + two heal events");
+            assertTrue(lines.get(1).contains("build-1.0.0,android,login.submitButton,resourceIdContainsFragment"));
+            assertTrue(lines.get(2).contains("build-1.0.0,android,login.usernameField,resourceIdContainsFragment"));
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    public void appendEventsWritesNothingOnAZeroHealRun() throws IOException {
+        Path file = Files.createTempFile("healing-events", ".csv");
+        Files.deleteIfExists(file);
+        try {
+            HealingReporter.appendEvents("build-1.0.0", file);
+            assertTrue(Files.notExists(file), "No heals - no file, nothing to log");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
 }
