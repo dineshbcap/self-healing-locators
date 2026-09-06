@@ -1,0 +1,69 @@
+// Reference post-build stage for a consumer framework's Jenkinsfile - not run
+// by this repo's own CI. Copy into your pipeline and adjust paths/credentials.
+//
+// What it does:
+//   1. Archives target/healing-report.json and target/healing-metrics.csv so
+//      they survive the build and show up on the build page.
+//   2. Restores yesterday's healing-metrics.csv from the last successful build
+//      before the test stage runs, so healCount accumulates into a real
+//      per-release trend instead of resetting every build (target/ is wiped
+//      by `mvn clean` each run - see HealingConfig#metricsFile).
+//   3. If the report has any heals, prints the Slack/Teams payload via
+//      HealingReportPublisherCli and posts it with curl using a Jenkins
+//      credential (never put the webhook URL in the Jenkinsfile itself).
+//
+// Requires: consumer framework's build already produced self-healing-locators
+// on the classpath (it's a dependency of the framework's own pom.xml), and a
+// Jenkins "Secret text" credential holding the Slack/Teams webhook URL.
+
+pipeline {
+    agent any
+
+    stages {
+        stage('Restore healing metrics history') {
+            steps {
+                copyArtifacts(projectName: env.JOB_NAME,
+                        selector: lastSuccessful(),
+                        filter: 'target/healing-metrics.csv',
+                        optional: true)
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh 'mvn test'
+            }
+        }
+
+        stage('Publish healing report') {
+            steps {
+                archiveArtifacts artifacts: 'target/healing-report.json,target/healing-metrics.csv',
+                        allowEmptyArchive: true
+
+                withCredentials([string(credentialsId: 'healing-webhook-url', variable: 'WEBHOOK_URL')]) {
+                    sh '''
+                        set -e
+                        PAYLOAD=$(java -cp target/classes:$(cat target/classpath.txt 2>/dev/null || echo "") \\
+                            com.dinesh.healing.HealingReportPublisherCli \\
+                            target/healing-report.json --format slack)
+                        if echo "$PAYLOAD" | grep -q "nothing to publish"; then
+                            echo "$PAYLOAD"
+                        else
+                            curl -sf -X POST -H 'Content-Type: application/json' \\
+                                -d "$PAYLOAD" "$WEBHOOK_URL"
+                        fi
+                    '''
+                }
+            }
+        }
+    }
+}
+
+// Alternative: skip curl entirely and let the CLI post directly (still keeps
+// the URL out of the Jenkinsfile via the credential binding):
+//   sh 'java -cp ... com.dinesh.healing.HealingReportPublisherCli \
+//        target/healing-report.json --format slack --post "$WEBHOOK_URL"'
+//
+// `target/classpath.txt` above assumes a `mvn dependency:build-classpath
+// -Dmdep.outputFile=target/classpath.txt` step earlier in the pipeline (or
+// substitute your framework's existing shaded/fat jar).

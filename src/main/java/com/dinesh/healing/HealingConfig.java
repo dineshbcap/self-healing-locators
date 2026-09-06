@@ -15,6 +15,14 @@ import java.util.Properties;
  *   healing.cache.file         path for the persisted healing cache (default target/healing-cache.json)
  *   healing.report.file        path for the healing report (default target/healing-report.json)
  *
+ * Phase 3 keys (reporting):
+ *   healing.metrics.file               CSV, one row appended per run (default target/healing-metrics.csv)
+ *   healing.report.webhook.enabled     default false
+ *   healing.report.webhook.url         Slack incoming-webhook or Teams workflow-webhook URL (default blank)
+ *   healing.report.webhook.format      slack (default) | teams | teams-messagecard (legacy Office 365 connector)
+ *   healing.report.webhook.timeoutSeconds  default 10
+ *   healing.report.webhook.maxItems    heals listed before truncating to "+N more" (default 20)
+ *
  * Phase 2 keys:
  *   healing.llm.enabled                default false
  *   healing.llm.provider               anthropic (default) | ollama | vastai
@@ -69,6 +77,42 @@ public final class HealingConfig {
 
     public String reportFile() {
         return get("healing.report.file", "target/healing-report.json");
+    }
+
+    /**
+     * One CSV row appended per suite run (timestamp, build id, heal count) - the
+     * healing-rate-per-release trend line. Living under target/ means it only
+     * accumulates within a single build; point this at a path your Jenkins job
+     * restores from the previous run (e.g. via copyArtifacts) before the suite
+     * starts if you want it to persist across builds.
+     */
+    public String metricsFile() {
+        return get("healing.metrics.file", "target/healing-metrics.csv");
+    }
+
+    // ---- Phase 3: report webhook (Slack / Teams) ----
+
+    public boolean reportWebhookEnabled() {
+        return Boolean.parseBoolean(get("healing.report.webhook.enabled", "false"));
+    }
+
+    /** Slack incoming-webhook URL, or a Teams Power Automate workflow-webhook URL. */
+    public String reportWebhookUrl() {
+        return get("healing.report.webhook.url", "");
+    }
+
+    /** One of "slack" (default), "teams", or "teams-messagecard" (legacy Office 365 connector). */
+    public String reportWebhookFormat() {
+        return get("healing.report.webhook.format", "slack").trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    public int reportWebhookTimeoutSeconds() {
+        return Integer.parseInt(get("healing.report.webhook.timeoutSeconds", "10"));
+    }
+
+    /** Heals listed in the message body before truncating to "...and N more". */
+    public int reportWebhookMaxItems() {
+        return Integer.parseInt(get("healing.report.webhook.maxItems", "20"));
     }
 
     public boolean llmEnabled() {

@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -97,6 +98,32 @@ public final class HealingReporter {
         } catch (IOException e) {
             LOG.warn("Could not write healing report: {}", e.toString());
         }
+    }
+
+    /**
+     * Appends one CSV row (timestamp, build id, heal count) for this run - the
+     * raw data behind a healing-rate-per-release trend. Call alongside
+     * {@link #writeReport} from the same {@code @AfterSuite} hook. Safe to call
+     * every run, including zero-heal runs - a flat trend line is itself signal.
+     */
+    public static void appendMetric(String buildId, Path metricsFile) {
+        try {
+            Files.createDirectories(metricsFile.toAbsolutePath().getParent());
+            boolean writeHeader = Files.notExists(metricsFile);
+            StringBuilder line = new StringBuilder();
+            if (writeHeader) {
+                line.append("timestamp,buildId,healCount\n");
+            }
+            line.append(Instant.now()).append(',').append(csvSafe(buildId)).append(',').append(RECORDS.size())
+                    .append('\n');
+            Files.writeString(metricsFile, line, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            LOG.warn("Could not append healing metric: {}", e.toString());
+        }
+    }
+
+    private static String csvSafe(String s) {
+        return (s == null ? "unknown" : s).replace(",", "_").replace("\n", " ");
     }
 
     /** For tests. */

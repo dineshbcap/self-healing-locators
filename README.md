@@ -108,7 +108,10 @@ HealingReporter.addListener(record ->
 ```java
 @AfterSuite(alwaysRun = true)
 public void writeHealingArtifacts() {
-    HealingReporter.writeReport(Path.of(new HealingConfig().reportFile()));
+    HealingConfig config = new HealingConfig();
+    HealingReporter.writeReport(Path.of(config.reportFile()));
+    HealingReporter.appendMetric(System.getProperty("app.build.id", "unknown"), Path.of(config.metricsFile()));
+    HealingReportPublisher.publish(HealingReporter.records(), config); // no-op unless webhook.enabled=true
     // cache.persist() already covered by persistOnShutdown(), or call explicitly here.
 }
 ```
@@ -117,8 +120,11 @@ public void writeHealingArtifacts() {
 
 - Nightly regression: defaults (`healing.failOnHeal=false`) — runs stay green, report shows debt.
 - PR gate: `mvn test -Dhealing.failOnHeal=true` — a heal fails the check, forcing the locator fix.
-- Post-build: parse `target/healing-report.json`; if non-empty, post a summary
-  ("N locators healed — POM updates recommended") to Slack/Teams.
+- Post-build: either let `HealingReportPublisher.publish(...)` above post directly (set
+  `healing.report.webhook.enabled=true` + `.url`), or keep posting a pipeline concern and call
+  `HealingReportPublisherCli` from the Jenkinsfile instead — see
+  [Phase 3 — Reporting & Jenkins integration](#phase-3--reporting--jenkins-integration-added) and
+  `jenkins/Jenkinsfile.healing-notify` for a ready-to-copy post-build stage.
 
 ## Configuration (healing.properties or -D overrides)
 
@@ -130,6 +136,11 @@ public void writeHealingArtifacts() {
 | `healing.report.file` | `target/healing-report.json` | Report output path |
 | `healing.llm.enabled` | `false` | Phase 2 switch |
 | `healing.llm.confidence.threshold` | `0.7` | Phase 2 minimum confidence |
+| `healing.metrics.file` | `target/healing-metrics.csv` | Phase 3: healing-rate-per-release CSV, one row per run |
+| `healing.report.webhook.enabled` | `false` | Phase 3: post a heal summary to Slack/Teams at suite end |
+| `healing.report.webhook.url` | *(blank)* | Slack incoming-webhook or Teams workflow-webhook URL |
+| `healing.report.webhook.format` | `slack` | `slack` \| `teams` \| `teams-messagecard` (legacy) |
+| `healing.report.webhook.maxItems` | `20` | Heals listed in the message before truncating to "...and N more" |
 
 ## Running the demo tests
 
@@ -161,8 +172,12 @@ git hooks (in IntelliJ, enable `Settings → Version Control → Git → Run git
 - **Phase 2:** `LlmHealingEngine` (Claude Messages API via `java.net.http`), `PageSourcePruner`
   (5–10× XML shrink), `PiiRedactor` (mask account/card/currency patterns before anything
   leaves the machine), confidence gating.
-- **Phase 3:** richer Jenkins reporting, healing metrics per release, parallel-run hardening review.
+- **Phase 3 (added):** `HealingReportPublisher` (Slack/Teams webhook summary), `HealingReporter.appendMetric`
+  (healing-rate-per-release CSV), `HealingReportPublisherCli` + `jenkins/Jenkinsfile.healing-notify`
+  (post-build wiring). Parallel-run hardening review still open.
 - **Phase 4:** auto-generated locators properties patch from the healing report (one-click PR to fix debt).
+- **Phase 5 (stretch):** healing analytics — trend heal events per screen over time as a UI-churn
+  signal (which screens heal constantly vs. never) using the Phase 3 metrics CSV as raw input.
 
 ---
 
@@ -304,3 +319,75 @@ LlmHealingEngine(config)`:
   one provider silently drifting from the others
 - `LlmHealingEngineFactoryTest` — `healing.llm.provider` selects the right engine
   (case-insensitive), unknown values and `healing.llm.enabled=false` both yield `NO_OP`
+
+---
+
+## Phase 3 — Reporting & Jenkins integration (added)
+
+New classes:
+- `HealingReportPublisher` — builds a "N locators healed - POM updates recommended"
+  message and posts it to a Slack incoming-webhook or Teams webhook from the same
+  `@AfterSuite` hook that writes the JSON report. No-ops (never fails the build) when
+  the webhook is disabled, the URL is blank, or there were zero heals this run. The
+  HTTP layer is injectable (`Transport`), same pattern as the Phase 2 engines.
+- `HealingReportPublisherCli` — the same payload logic as a Jenkins-callable `main()`:
+  reads `healing-report.json` and either prints the webhook JSON to stdout (so the
+  pipeline owns the `curl` call and credential binding) or posts it directly with
+  `--post <url>`.
+- `HealingReporter.appendMetric(buildId, file)` — appends one CSV row (timestamp,
+  build id, heal count) per run to `healing.metrics.file`. That's the raw data behind
+  a healing-rate-per-release trend line (Phase 5 turns it into an actual trend).
+
+### Wiring it in
+
+Call from the same `@AfterSuite` hook as `HealingReporter.writeReport` (see
+[Suite teardown](#5-suite-teardown-testng) above):
+
+```java
+HealingConfig config = new HealingConfig();
+HealingReporter.writeReport(Path.of(config.reportFile()));
+HealingReporter.appendMetric(System.getProperty("app.build.id", "unknown"), Path.of(config.metricsFile()));
+HealingReportPublisher.publish(HealingReporter.records(), config);
+```
+
+`HealingReportPublisher.publish(...)` is inert until you set:
+```properties
+healing.report.webhook.enabled=true
+healing.report.webhook.url=https://hooks.slack.com/services/...
+healing.report.webhook.format=slack
+```
+
+### Payload formats
+
+- `slack` (default) — Slack incoming-webhook body: `{"text": "..."}`.
+- `teams` — the current supported Teams integration path: a Power Automate
+  "when a webhook request is received" workflow, posted the same `{"text": "..."}`
+  shape as Slack. Microsoft's schema for that trigger is whatever your specific Flow
+  is built to accept, so **verify with a real test payload** before relying on it -
+  this isn't a fixed platform contract the way the Slack shape is.
+- `teams-messagecard` — the legacy Office 365 Connector `MessageCard` schema.
+  Microsoft has been retiring these connectors since 2024/2025; only use this if
+  your tenant still has a working one.
+
+### Jenkins
+
+`jenkins/Jenkinsfile.healing-notify` is a copy-paste reference post-build stage
+(not run by this repo's own build) that:
+1. Restores the previous run's `healing-metrics.csv` before the test stage, so the
+   per-run CSV rows accumulate into a real cross-build trend (`target/` is wiped by
+   `mvn clean` each build, so this module alone can't persist it across runs).
+2. Archives `healing-report.json` / `healing-metrics.csv` as build artifacts.
+3. Runs `HealingReportPublisherCli` and posts the result to a webhook URL held in a
+   Jenkins credential (never hard-code the URL in the Jenkinsfile).
+
+Either let the Java-side `HealingReportPublisher.publish(...)` post directly, or keep
+posting a pipeline concern via the CLI - not both, to avoid double-posting.
+
+### Phase 3 tests (CI-safe, no network)
+- `HealingReportPublisherTest` — payload shape per format (slack/teams/teams-messagecard,
+  unrecognized-format fallback), singular/plural + truncation in the summary text, and
+  the publish no-op matrix (webhook disabled, blank URL, zero heals, transport failure
+  swallowed, correct URL/body on a successful call)
+- `HealingReporterTest` — `record()` notifies listeners and survives a throwing listener,
+  `writeReport()` produces parseable JSON, `appendMetric()` writes the CSV header once
+  then appends rows, and CSV-escapes a build id containing commas/newlines
