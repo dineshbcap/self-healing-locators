@@ -60,7 +60,7 @@ public final class LocatorPatchCli {
         for (int i = 3; i < args.length; i++) {
             switch (args[i]) {
                 case "--apply" -> apply = true;
-                case "--diff-out" -> diffOut = Path.of(args[++i]);
+                case "--diff-out" -> diffOut = Path.of(CliArgs.next(args, ++i, "--diff-out"));
                 default -> {
                     System.err.println("Unknown argument: " + args[i]);
                     System.exit(2);

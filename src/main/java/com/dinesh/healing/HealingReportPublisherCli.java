@@ -51,9 +51,9 @@ public final class HealingReportPublisherCli {
         int maxItems = 20;
         for (int i = 1; i < args.length; i++) {
             switch (args[i]) {
-                case "--format" -> format = args[++i];
-                case "--max-items" -> maxItems = Integer.parseInt(args[++i]);
-                case "--post" -> webhookUrl = args[++i];
+                case "--format" -> format = CliArgs.next(args, ++i, "--format");
+                case "--max-items" -> maxItems = Integer.parseInt(CliArgs.next(args, ++i, "--max-items"));
+                case "--post" -> webhookUrl = CliArgs.next(args, ++i, "--post");
                 default -> {
                     System.err.println("Unknown argument: " + args[i]);
                     System.exit(2);

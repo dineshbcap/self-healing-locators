@@ -1,11 +1,17 @@
 package com.dinesh.healing;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Properties;
@@ -30,6 +36,7 @@ import java.util.TreeSet;
  */
 public final class LocatorRepository {
 
+    private static final Logger LOG = LoggerFactory.getLogger(LocatorRepository.class);
     private static final String DESCRIPTION_SUFFIX = ".description";
 
     /** key -> (platform -> def) */
@@ -39,6 +46,46 @@ public final class LocatorRepository {
     private LocatorRepository(Map<Platform, Properties> byPlatform, String sourceDescription) {
         this.sourceDescription = sourceDescription;
         byPlatform.forEach(this::parse);
+        List<String> mismatched = keysMissingOnAnyPlatform();
+        if (!mismatched.isEmpty()) {
+            LOG.warn("Locator key(s) not defined for every platform in {}: {} - each key should exist in both "
+                    + "platform files (see the class javadoc). Call assertKeysSyncedAcrossPlatforms() from a "
+                    + "startup smoke test if you want this to fail the build instead of surfacing later as a "
+                    + "NoSuchElementException the first time a test looks up the missing platform's definition.",
+                    sourceDescription, mismatched);
+        }
+    }
+
+    /**
+     * Locator keys present for at least one platform but missing on at least one other,
+     * e.g. {@code "settings.darkModeToggle (missing: [IOS])"}. Empty when every key is
+     * defined for every {@link Platform}.
+     */
+    public List<String> keysMissingOnAnyPlatform() {
+        List<String> incomplete = new ArrayList<>();
+        for (Map.Entry<String, Map<Platform, LocatorDef>> entry : locators.entrySet()) {
+            if (entry.getValue().size() < Platform.values().length) {
+                Set<Platform> missing = EnumSet.allOf(Platform.class);
+                missing.removeAll(entry.getValue().keySet());
+                incomplete.add(entry.getKey() + " (missing: " + missing + ")");
+            }
+        }
+        return incomplete;
+    }
+
+    /**
+     * Fail-fast opt-in for the "same key on every platform" convention - not called
+     * automatically (a real app can have legitimate platform-exclusive screens, so
+     * construction only logs a warning; see the constructor). Call this from a
+     * dedicated startup/smoke test if you want a mismatch to break the build
+     * immediately rather than surfacing later as a {@link NoSuchElementException}.
+     */
+    public void assertKeysSyncedAcrossPlatforms() {
+        List<String> mismatched = keysMissingOnAnyPlatform();
+        if (!mismatched.isEmpty()) {
+            throw new IllegalStateException(
+                    "Locator key(s) not defined for every platform in " + sourceDescription + ": " + mismatched);
+        }
     }
 
     public static LocatorRepository fromClasspath(String androidResourcePath, String iosResourcePath) {

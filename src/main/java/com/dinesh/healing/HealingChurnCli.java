@@ -36,7 +36,7 @@ public final class HealingChurnCli {
         int topN = 10;
         for (int i = 1; i < args.length; i++) {
             switch (args[i]) {
-                case "--top" -> topN = Integer.parseInt(args[++i]);
+                case "--top" -> topN = Integer.parseInt(CliArgs.next(args, ++i, "--top"));
                 default -> {
                     System.err.println("Unknown argument: " + args[i]);
                     System.exit(2);

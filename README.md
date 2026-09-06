@@ -67,6 +67,13 @@ reading the matching properties file for that platform. The `description` field 
 write what the element IS in plain English. It drives the text-based deterministic strategies
 today and becomes the LLM prompt in Phase 2.
 
+A key missing from one platform's file doesn't fail the build (real apps can have
+legitimate platform-exclusive screens) — it logs a WARN at repository load time via
+`LocatorRepository.keysMissingOnAnyPlatform()`, so a typo surfaces immediately in the
+console instead of as a `NoSuchElementException` the first time some test happens to hit
+that key on the missing platform. If you want a mismatch to fail the build outright, call
+`repository.assertKeysSyncedAcrossPlatforms()` from a startup smoke test.
+
 ### 3. Wire it in your driver factory / hooks
 
 ```java
