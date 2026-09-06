@@ -92,6 +92,15 @@ SelfHealingElementLocator healing =
         new SelfHealingElementLocator(driver, repo, cache, config);
 ```
 
+**Parallel-run safe by this construction:** `repo` and `cache` are meant to be built ONCE and shared
+across every parallel TestNG thread (one `SelfHealingElementLocator` per thread/device, all wrapping
+the same `driver`-less `repo`/`cache`). `HealingCache` uses a `ConcurrentHashMap` internally and a
+`synchronized persist()`, and `HealingReporter`'s static state is a `CopyOnWriteArrayList` — stress-tested
+under 16 threads × 200 concurrent ops with zero lost writes (`ConcurrencyHardeningTest`). `LocatorRepository`
+is a plain `HashMap` but is only ever mutated during construction, so it's safe for concurrent reads
+afterward — just build it before spinning up your parallel thread pool (as above), not lazily on first
+use from a worker thread.
+
 In your page object base class:
 
 ```java
@@ -184,7 +193,7 @@ git hooks (in IntelliJ, enable `Settings → Version Control → Git → Run git
   leaves the machine), confidence gating.
 - **Phase 3 (added):** `HealingReportPublisher` (Slack/Teams webhook summary), `HealingReporter.appendMetric`
   (healing-rate-per-release CSV), `HealingReportPublisherCli` + `jenkins/Jenkinsfile.healing-notify`
-  (post-build wiring). Parallel-run hardening review still open.
+  (post-build wiring).
 - **Phase 4 (added):** `LocatorPatchGenerator` + `LocatorPatchCli` — a ready-to-review unified diff
   (or direct `--apply`) against `locators_<platform>.properties` from the healing report, platform-aware
   so an Android heal can never overwrite the iOS file's line for the same key.
