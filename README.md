@@ -464,6 +464,15 @@ Run once per platform file. A mixed Android+iOS report naturally produces
 `wrongPlatformKeys` warnings for the other platform's keys when you run it against
 this one - expected, not an error.
 
+### One-click PR (Jenkins)
+
+`jenkins/Jenkinsfile.locator-patch` is a reference job that does the `--apply` +
+branch + commit + `gh pr create` sequence for you: it pulls the last successful test
+job's archived `healing-report.json`, applies it to the chosen platform's properties
+file, and opens a PR if anything actually changed. Deliberately a **separate,
+manually-triggered** job rather than chained onto every test run - a heal is a
+candidate fix, not a guaranteed one, so a human still reviews the PR before merging.
+
 ### Phase 4 tests (CI-safe, no network)
 - `HealingCacheTest` — `HealingCache.recover` round-trips every `LocatorStrategy`
   through its real `AppiumBy`/`By` `toString()` shape (this closes a latent gap where
