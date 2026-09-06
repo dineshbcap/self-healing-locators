@@ -1,5 +1,7 @@
 # Self-Healing Locators — Phase 1
 
+[![CI](https://github.com/dineshbcap/self-healing-locators/actions/workflows/ci.yml/badge.svg)](https://github.com/dineshbcap/self-healing-locators/actions/workflows/ci.yml)
+
 A drop-in self-healing element locator layer for Appium + Java + Cucumber + TestNG frameworks.
 
 **Phase 1 scope (this module):** locator repository, self-healing decorator, deterministic
