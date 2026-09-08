@@ -473,6 +473,10 @@ file, and opens a PR if anything actually changed. Deliberately a **separate,
 manually-triggered** job rather than chained onto every test run - a heal is a
 candidate fix, not a guaranteed one, so a human still reviews the PR before merging.
 
+No Jenkins? `scripts/local-locator-pr.sh` is the same `--apply` + branch + commit +
+`gh pr create` sequence as a standalone script - copy it into the consuming project
+and run `./local-locator-pr.sh android --run-tests` (needs `gh auth login` done once).
+
 ### Phase 4 tests (CI-safe, no network)
 - `HealingCacheTest` — `HealingCache.recover` round-trips every `LocatorStrategy`
   through its real `AppiumBy`/`By` `toString()` shape (this closes a latent gap where
