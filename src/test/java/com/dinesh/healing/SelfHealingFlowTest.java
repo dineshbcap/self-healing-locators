@@ -79,7 +79,8 @@ public class SelfHealingFlowTest {
         // ...but exactly one element still contains the distinctive 'login' fragment.
         WebElement renamed = mock(WebElement.class);
         when(driver.findElements(
-                AppiumBy.xpath("//*[contains(@resource-id,'login')]")))
+                AppiumBy.xpath("//*[contains(translate(@resource-id,"
+                        + "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'login')]")))
                 .thenReturn(List.of(renamed));
 
         WebElement healed = locator().find("login.submitButton");
@@ -116,7 +117,8 @@ public class SelfHealingFlowTest {
         when(driver.findElements(any(By.class))).thenReturn(List.of());
         WebElement renamed = mock(WebElement.class);
         when(driver.findElements(
-                AppiumBy.xpath("//*[contains(@resource-id,'login')]")))
+                AppiumBy.xpath("//*[contains(translate(@resource-id,"
+                        + "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'login')]")))
                 .thenReturn(List.of(renamed));
 
         loc.find("login.submitButton");
@@ -144,7 +146,8 @@ public class SelfHealingFlowTest {
                     .thenThrow(new NoSuchElementException("gone"));
             when(driver.findElements(any(By.class))).thenReturn(List.of());
             when(driver.findElements(
-                    AppiumBy.xpath("//*[contains(@resource-id,'login')]")))
+                    AppiumBy.xpath("//*[contains(translate(@resource-id,"
+                            + "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'login')]")))
                     .thenReturn(List.of(mock(WebElement.class)));
 
             assertThrows(SelfHealingElementLocator.HealedLocatorException.class,
@@ -175,7 +178,8 @@ public class SelfHealingFlowTest {
                 .thenThrow(new NoSuchElementException("gone"));
         when(driver.findElements(any(By.class))).thenReturn(List.of());
         when(driver.findElements(
-                AppiumBy.xpath("//*[contains(@resource-id,'login')]")))
+                AppiumBy.xpath("//*[contains(translate(@resource-id,"
+                        + "'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'login')]")))
                 .thenReturn(List.of(mock(WebElement.class)));
 
         locator().find("login.submitButton");

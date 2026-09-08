@@ -73,7 +73,7 @@ public final class DeterministicHealer {
         if (def.strategy() == LocatorStrategy.ACCESSIBILITY_ID) {
             if (platform == Platform.ANDROID) {
                 candidates.add(new Candidate("resourceIdContainsA11yValue",
-                        AppiumBy.xpath("//*[contains(@resource-id,'" + xpathSafe(def.value()) + "')]")));
+                        AppiumBy.xpath(xpathContainsIgnoreCase("resource-id", def.value()))));
             } else {
                 // XCUITest has no resource-id, but the same identifier sometimes
                 // moves from `name` (accessibility id) to `label` or `value`.
@@ -96,11 +96,11 @@ public final class DeterministicHealer {
             if (fragment != null) {
                 if (platform == Platform.ANDROID) {
                     candidates.add(new Candidate("resourceIdContainsFragment",
-                            AppiumBy.xpath("//*[contains(@resource-id,'" + xpathSafe(fragment) + "')]")));
+                            AppiumBy.xpath(xpathContainsIgnoreCase("resource-id", fragment))));
                 } else {
                     candidates.add(new Candidate("iosNameContainsFragment",
                             AppiumBy.iOSNsPredicateString(
-                                    "name CONTAINS '" + predicateSafe(fragment) + "'")));
+                                    "name CONTAINS[c] '" + predicateSafe(fragment) + "'")));
                 }
             }
         }
@@ -110,9 +110,9 @@ public final class DeterministicHealer {
             if (platform == Platform.ANDROID) {
                 candidates.add(new Candidate("androidTextContains:" + keyword,
                         AppiumBy.androidUIAutomator(
-                                "new UiSelector().textContains(\"" + keyword + "\")")));
+                                "new UiSelector().textMatches(\"(?i).*" + Pattern.quote(keyword) + ".*\")")));
                 candidates.add(new Candidate("androidDescContains:" + keyword,
-                        AppiumBy.xpath("//*[contains(@content-desc,'" + xpathSafe(keyword) + "')]")));
+                        AppiumBy.xpath(xpathContainsIgnoreCase("content-desc", keyword))));
             } else {
                 candidates.add(new Candidate("iosLabelContains:" + keyword,
                         AppiumBy.iOSNsPredicateString(
@@ -147,7 +147,7 @@ public final class DeterministicHealer {
                 .replaceAll("([a-z])([A-Z])", "$1 $2").toLowerCase(Locale.ROOT));
         String best = null;
         for (String part : parts) {
-            if (part.length() >= 4 && !STOP_WORDS.contains(part)) {
+            if (part.length() >= 3 && !STOP_WORDS.contains(part)) {
                 if (best == null || part.length() > best.length()) {
                     best = part;
                 }
@@ -190,6 +190,18 @@ public final class DeterministicHealer {
             LOG.debug("Candidate {} threw {}", by, e.toString());
             return Optional.empty();
         }
+    }
+
+    /**
+     * Case-insensitive XPath 1.0 contains() - the driver's XPath engine has no [c]-style
+     * modifier or matches()/regex support, so case-folding needs the classic translate()
+     * idiom: lowercase the attribute value at match time, and lowercase the search term
+     * up front so the comparison is apples-to-apples.
+     */
+    private static String xpathContainsIgnoreCase(String attribute, String value) {
+        return "//*[contains(translate(@" + attribute
+                + ",'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'"
+                + xpathSafe(value.toLowerCase(Locale.ROOT)) + "')]";
     }
 
     private static String xpathSafe(String s) {
